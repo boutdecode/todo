@@ -1,0 +1,276 @@
+// Package runner runs a workflow through `awf run -o streaming` inside a PTY
+// (adapted from awf-tui's awfrun) and turns its output into events.
+package runner
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/creack/pty"
+)
+
+// Event kinds.
+const (
+	KindStepStarted = "step.started"
+	KindStepDone    = "step.done"
+	KindOutput      = "output"
+	KindAsk         = "ask"
+	KindDone        = "done" // terminal; Status is completed|failed|cancelled
+)
+
+type Event struct {
+	Kind   string
+	Step   string
+	Status string
+	Stream string // "out" | "err"
+	Line   string
+	Error  string
+	Prompt string
+}
+
+// Run is one workflow execution.
+type Run struct {
+	ID     string
+	Events <-chan Event
+
+	cmd       *exec.Cmd
+	pty       *os.File
+	mu        sync.Mutex
+	cancelled bool
+	convAsk   bool
+	tail      []string
+}
+
+const (
+	convPrompt = "> "
+	// EOF ends a conversation step.
+	EOF = "\x04"
+	// ConvPrompt is the question shown while a conversation waits for the user.
+	ConvPrompt = "Conversation — votre message (ctrl+d pour terminer)"
+)
+
+var (
+	reStarted = regexp.MustCompile(`^Workflow started: (\S+)`)
+	reStep    = regexp.MustCompile(`^\s*→ (\S+)\s*$`)
+	reStepOK  = regexp.MustCompile(`^\s*✓ (\S+): (\w+)\s*$`)
+	reStepKO  = regexp.MustCompile(`^(\S+): (failed|cancelled|skipped)\s*$`)
+	reFailed  = regexp.MustCompile(`^Workflow failed: (.*)$`)
+)
+
+// Args builds the `awf run` arguments (inputs sorted for stable output).
+func Args(name string, inputs map[string]string) []string {
+	args := []string{"run", name, "-o", "streaming"}
+	keys := make([]string, 0, len(inputs))
+	for k := range inputs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--input", fmt.Sprintf("%s=%s", k, inputs[k]))
+	}
+	return args
+}
+
+func splitLines(data []byte, atEOF bool) (int, []byte, error) {
+	for i, b := range data {
+		if b == '\n' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	if ansi.Strip(strings.TrimLeft(string(data), "\r")) == convPrompt {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func (r *Run) addTail(line string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tail = append(r.tail, line)
+	if len(r.tail) > 200 {
+		r.tail = r.tail[len(r.tail)-200:]
+	}
+}
+
+func (r *Run) tailText() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.TrimSpace(strings.Join(r.tail, "\n"))
+}
+
+func withOutput(msg, out string) string {
+	if out == "" || strings.Contains(msg, out) {
+		return msg
+	}
+	return msg + "\n" + out
+}
+
+// Start launches the workflow and waits for its execution id.
+func Start(bin, dir, name string, inputs map[string]string) (*Run, error) {
+	cmd := exec.Command(bin, Args(name, inputs)...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	// A PTY keeps stdout/stderr ordered and lets conversation steps start.
+	pr, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 1000})
+	if err != nil {
+		return nil, err
+	}
+	r := &Run{cmd: cmd, pty: pr}
+	ch := make(chan Event, 256)
+	r.Events = ch
+	idc := make(chan string, 1)
+	go r.pump(pr, ch, idc)
+
+	select {
+	case id := <-idc:
+		if id == "" {
+			return nil, errors.New(withOutput("le run s'est arrêté avant de recevoir son identifiant", r.tailText()))
+		}
+		return r, nil
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		return nil, errors.New(withOutput("délai dépassé en attendant l'identifiant du run", r.tailText()))
+	}
+}
+
+// Answer sends a line to a conversation step (EOF ends it).
+func (r *Run) Answer(text string) error {
+	r.mu.Lock()
+	r.convAsk = false
+	r.mu.Unlock()
+	if text != EOF {
+		text += "\n"
+	}
+	_, err := r.pty.WriteString(text)
+	return err
+}
+
+// Cancel interrupts the workflow (Ctrl+C).
+func (r *Run) Cancel() error {
+	r.mu.Lock()
+	r.cancelled = true
+	r.mu.Unlock()
+	return r.cmd.Process.Signal(os.Interrupt)
+}
+
+func (r *Run) pump(pr *os.File, ch chan<- Event, idc chan<- string) {
+	defer close(ch)
+	var (
+		step, failMsg string
+		sentID        bool
+	)
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		sc.Split(splitLines)
+		for sc.Scan() {
+			line := strings.TrimRight(ansi.Strip(sc.Text()), "\r")
+			if line == convPrompt {
+				r.mu.Lock()
+				r.convAsk = true
+				r.mu.Unlock()
+				ch <- Event{Kind: KindAsk, Step: step, Prompt: ConvPrompt}
+				continue
+			}
+			r.addTail(line)
+			switch {
+			case reStarted.MatchString(line):
+				if !sentID {
+					sentID = true
+					r.ID = reStarted.FindStringSubmatch(line)[1]
+					idc <- r.ID
+				}
+			case reStep.MatchString(line):
+				step = reStep.FindStringSubmatch(line)[1]
+				ch <- Event{Kind: KindStepStarted, Step: step, Status: "running"}
+			case reStepOK.MatchString(line):
+				m := reStepOK.FindStringSubmatch(line)
+				ch <- Event{Kind: KindStepDone, Step: m[1], Status: m[2]}
+			case reStepKO.MatchString(line):
+				m := reStepKO.FindStringSubmatch(line)
+				ch <- Event{Kind: KindStepDone, Step: m[1], Status: m[2]}
+			case strings.HasPrefix(line, "[OUT] "):
+				ch <- Event{Kind: KindOutput, Step: step, Stream: "out", Line: line[6:]}
+			case strings.HasPrefix(line, "[ERR] "):
+				ch <- Event{Kind: KindOutput, Step: step, Stream: "err", Line: line[6:]}
+			case reFailed.MatchString(line):
+				failMsg = reFailed.FindStringSubmatch(line)[1]
+			}
+		}
+	}()
+
+	waitErr := r.cmd.Wait()
+	select {
+	case <-scanDone:
+	case <-time.After(300 * time.Millisecond):
+		pr.Close()
+		<-scanDone
+	}
+	pr.Close()
+	if !sentID {
+		idc <- ""
+	}
+
+	r.mu.Lock()
+	cancelled := r.cancelled
+	r.mu.Unlock()
+	switch {
+	case cancelled:
+		ch <- Event{Kind: KindDone, Status: "cancelled"}
+	case failMsg != "" || waitErr != nil:
+		if failMsg == "" {
+			failMsg = waitErr.Error()
+		}
+		ch <- Event{Kind: KindDone, Status: "failed", Error: withOutput(failMsg, r.tailText())}
+	default:
+		ch <- Event{Kind: KindDone, Status: "completed"}
+	}
+}
+
+// Workflows lists workflow names available for dir: the project's
+// .awf/workflows, then the user's ($XDG_CONFIG_HOME/awf and ~/.awf).
+func Workflows(dir string) []string {
+	home, _ := os.UserHomeDir()
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if xdg == "" {
+		xdg = filepath.Join(home, ".config")
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, d := range []string{
+		filepath.Join(dir, ".awf", "workflows"),
+		filepath.Join(xdg, "awf", "workflows"),
+		filepath.Join(home, ".awf", "workflows"),
+	} {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			n := e.Name()
+			ext := filepath.Ext(n)
+			if e.IsDir() || (ext != ".yaml" && ext != ".yml") {
+				continue
+			}
+			n = strings.TrimSuffix(n, ext)
+			if !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
