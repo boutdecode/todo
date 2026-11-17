@@ -11,6 +11,7 @@ import (
 
 	"todo/internal/board"
 	"todo/internal/config"
+	"todo/internal/runner"
 	"todo/internal/ui"
 )
 
@@ -34,7 +35,9 @@ func main() {
 	if err != nil {
 		fatal(fmt.Errorf("board %s : %w", board.Path(abs), err))
 	}
-	if _, err := tea.NewProgram(ui.New(abs, cfg.AWF, cfg, b), tea.WithAltScreen()).Run(); err != nil {
+	model := ui.New(abs, cfg.AWF, cfg, b)
+	model.SetVersion(runner.Version(cfg.AWF))
+	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 		fatal(err)
 	}
 }

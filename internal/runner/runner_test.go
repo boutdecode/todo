@@ -96,3 +96,53 @@ func TestArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSteps(t *testing.T) {
+	y := `name: x
+states:
+  initial: a
+  a:
+    type: step
+    on_success: b
+  b:
+    type: agent
+    on_success: done
+  done:
+    type: terminal
+  failed:
+    type: terminal
+`
+	got := parseSteps([]byte(y))
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("%v", got)
+	}
+	if s := (Workflow{Steps: got}).Summary(); s != "a · b" {
+		t.Fatal(s)
+	}
+	if s := (Workflow{Steps: []string{"1", "2", "3", "4"}}).Summary(); s != "4 étapes" {
+		t.Fatal(s)
+	}
+}
+
+func TestPauseResume(t *testing.T) {
+	bin := fakeAWF(t, `echo "Workflow started: p1"; sleep 0.6; echo "[OUT] after"; echo ok`)
+	r, err := Start(bin, t.TempDir(), "wf", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(900 * time.Millisecond)
+	select {
+	case ev := <-r.Events:
+		t.Fatalf("event while paused: %+v", ev)
+	default:
+	}
+	if err := r.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if last := collect(t, r); last[len(last)-1].Status != "completed" {
+		t.Fatalf("%+v", last)
+	}
+}

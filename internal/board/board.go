@@ -24,6 +24,7 @@ type LastRun struct {
 	ID     string    `yaml:"id,omitempty"`
 	Status string    `yaml:"status"`
 	At     time.Time `yaml:"at"`
+	Secs   int       `yaml:"secs,omitempty"` // duration of the run
 }
 
 type Card struct {
@@ -32,12 +33,15 @@ type Card struct {
 	Description string            `yaml:"description,omitempty"`
 	Workflow    string            `yaml:"workflow,omitempty"`
 	Inputs      map[string]string `yaml:"inputs,omitempty"`
-	LastRun     *LastRun          `yaml:"last_run,omitempty"`
+	// AutoRun starts the workflow when the card enters an auto-run column.
+	AutoRun bool     `yaml:"auto_run,omitempty"`
+	LastRun *LastRun `yaml:"last_run,omitempty"`
 }
 
 type Column struct {
 	Name      string `yaml:"name"`
-	AutoRun   bool   `yaml:"auto_run,omitempty"`
+	Color     string `yaml:"color,omitempty"`    // title color (hex), optional
+	AutoRun   bool   `yaml:"auto_run,omitempty"` // execution column: workflows run while a card sits here
 	OnSuccess string `yaml:"on_success,omitempty"`
 	OnFailure string `yaml:"on_failure,omitempty"`
 	Cards     []Card `yaml:"cards,omitempty"`
@@ -50,10 +54,10 @@ type Board struct {
 // DefaultColumns is the layout used when neither the board nor the config defines one.
 func DefaultColumns() []Column {
 	return []Column{
-		{Name: "Backlog"},
-		{Name: "Doing", AutoRun: true, OnSuccess: "Done", OnFailure: "Failed"},
-		{Name: "Done"},
-		{Name: "Failed"},
+		{Name: "Backlog", Color: "#79c0ff"},
+		{Name: "À faire", Color: "#f2cc60"},
+		{Name: "En cours (AWF)", Color: "#ff7ac6", AutoRun: true, OnSuccess: "Terminé", OnFailure: "Terminé"},
+		{Name: "Terminé", Color: "#7ee787"},
 	}
 }
 
@@ -126,6 +130,16 @@ func (b *Board) Find(id string) (col, idx int, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// RunColumn returns the index of the first auto-run column, or -1.
+func (b *Board) RunColumn() int {
+	for i, c := range b.Columns {
+		if c.AutoRun {
+			return i
+		}
+	}
+	return -1
 }
 
 // Add appends a card at the end of column col.

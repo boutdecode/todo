@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
+	"gopkg.in/yaml.v3"
 )
 
 // Event kinds.
@@ -245,18 +247,9 @@ func (r *Run) pump(pr *os.File, ch chan<- Event, idc chan<- string) {
 // Workflows lists workflow names available for dir: the project's
 // .awf/workflows, then the user's ($XDG_CONFIG_HOME/awf and ~/.awf).
 func Workflows(dir string) []string {
-	home, _ := os.UserHomeDir()
-	xdg := os.Getenv("XDG_CONFIG_HOME")
-	if xdg == "" {
-		xdg = filepath.Join(home, ".config")
-	}
 	seen := map[string]bool{}
 	var names []string
-	for _, d := range []string{
-		filepath.Join(dir, ".awf", "workflows"),
-		filepath.Join(xdg, "awf", "workflows"),
-		filepath.Join(home, ".awf", "workflows"),
-	} {
+	for _, d := range searchDirs(dir) {
 		entries, _ := os.ReadDir(d)
 		for _, e := range entries {
 			n := e.Name()
@@ -274,3 +267,123 @@ func Workflows(dir string) []string {
 	sort.Strings(names)
 	return names
 }
+
+// Workflow describes a workflow available to cards.
+type Workflow struct {
+	Name  string
+	Steps []string
+}
+
+// Summary is "a · b · c" for up to 3 steps, "N étapes" beyond, "" when unknown.
+func (w Workflow) Summary() string {
+	switch {
+	case len(w.Steps) == 0:
+		return ""
+	case len(w.Steps) <= 3:
+		return strings.Join(w.Steps, " · ")
+	}
+	return fmt.Sprintf("%d étapes", len(w.Steps))
+}
+
+func searchDirs(dir string) []string {
+	home, _ := os.UserHomeDir()
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if xdg == "" {
+		xdg = filepath.Join(home, ".config")
+	}
+	return []string{
+		filepath.Join(dir, ".awf", "workflows"),
+		filepath.Join(xdg, "awf", "workflows"),
+		filepath.Join(home, ".awf", "workflows"),
+	}
+}
+
+// WorkflowFile returns the YAML file of a workflow, or "".
+func WorkflowFile(dir, name string) string {
+	for _, d := range searchDirs(dir) {
+		for _, ext := range []string{".yaml", ".yml"} {
+			p := filepath.Join(d, name+ext)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// Steps lists the step names of a workflow in document order: the entries of
+// `states:` except `initial` and terminal states.
+func Steps(dir, name string) []string {
+	p := WorkflowFile(dir, name)
+	if p == "" {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	return parseSteps(data)
+}
+
+func parseSteps(data []byte) []string {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	var steps []string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "states" {
+			continue
+		}
+		st := root.Content[i+1]
+		for j := 0; j+1 < len(st.Content); j += 2 {
+			key, val := st.Content[j].Value, st.Content[j+1]
+			if key == "initial" || val.Kind != yaml.MappingNode {
+				continue
+			}
+			terminal := false
+			for k := 0; k+1 < len(val.Content); k += 2 {
+				if val.Content[k].Value == "type" && val.Content[k+1].Value == "terminal" {
+					terminal = true
+				}
+			}
+			if !terminal {
+				steps = append(steps, key)
+			}
+		}
+	}
+	return steps
+}
+
+// ListWorkflows returns the workflows of dir with their steps.
+func ListWorkflows(dir string) []Workflow {
+	names := Workflows(dir)
+	out := make([]Workflow, len(names))
+	for i, n := range names {
+		out[i] = Workflow{Name: n, Steps: Steps(dir, n)}
+	}
+	return out
+}
+
+// Version returns the output of `awf --version` trimmed to its last word (e.g. "0.11.2"), or "".
+func Version(bin string) string {
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	f := strings.Fields(string(out))
+	if len(f) == 0 {
+		return ""
+	}
+	return strings.TrimPrefix(f[len(f)-1], "v")
+}
+
+// Pause suspends the workflow process group (SIGSTOP).
+func (r *Run) Pause() error { return syscall.Kill(-r.cmd.Process.Pid, syscall.SIGSTOP) }
+
+// Resume continues a paused workflow (SIGCONT).
+func (r *Run) Resume() error { return syscall.Kill(-r.cmd.Process.Pid, syscall.SIGCONT) }

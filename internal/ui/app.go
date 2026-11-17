@@ -3,15 +3,13 @@ package ui
 import (
 	"fmt"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"todo/internal/board"
 	"todo/internal/config"
@@ -29,16 +27,6 @@ const (
 	modeHelp
 )
 
-// runState is the in-memory state of a workflow run attached to a card.
-type runState struct {
-	run      *runner.Run
-	starting bool
-	lines    []string
-	status   string // running|completed|failed|cancelled
-	ask      string
-	err      string
-}
-
 type (
 	runStartedMsg struct {
 		card string
@@ -50,18 +38,20 @@ type (
 		ev   runner.Event
 		ch   <-chan runner.Event
 	}
+	tickMsg time.Time
 )
 
 // Model is the root Bubble Tea model.
 type Model struct {
 	dir, bin string
+	version  string
 	cfg      *config.Config
 	board    *board.Board
-	wfs      []string
+	wfs      []runner.Workflow
 
 	mode          mode
 	col           int
-	sel           []int // selected position (in the visible list) per column
+	sel           []int // position among the matching cards, per column
 	filter        string
 	filterIn      textinput.Model
 	w, h          int
@@ -72,22 +62,29 @@ type Model struct {
 	vp            viewport.Model
 	answer        textinput.Model
 	confirmCardID string
+	frame         int
+	ticking       bool
 }
 
 // New builds the model for a project directory.
 func New(dir, bin string, cfg *config.Config, b *board.Board) *Model {
 	fi := textinput.New()
-	fi.Prompt = "/ "
+	fi.Prompt = ""
 	ans := textinput.New()
 	ans.Prompt = "› "
-	return &Model{
+	m := &Model{
 		dir: dir, bin: bin, cfg: cfg, board: b,
-		wfs:  runner.Workflows(dir),
+		wfs:  runner.ListWorkflows(dir),
 		sel:  make([]int, len(b.Columns)),
 		runs: map[string]*runState{}, filterIn: fi, answer: ans,
 		w: 100, h: 30,
 	}
+	m.resize()
+	return m
 }
+
+// SetVersion records the awf version shown in the header.
+func (m *Model) SetVersion(v string) { m.version = v }
 
 func (m *Model) Init() tea.Cmd { return nil }
 
@@ -99,12 +96,19 @@ func (m *Model) save() {
 	}
 }
 
-// vis returns the indices of the cards of column ci that match the filter.
+func (m *Model) match(c board.Card) bool {
+	if m.filter == "" {
+		return true
+	}
+	f := strings.ToLower(m.filter)
+	return strings.Contains(strings.ToLower(c.Title+" "+c.Workflow), f)
+}
+
+// vis returns the indices of the cards of column ci matching the filter.
 func (m *Model) vis(ci int) []int {
 	var out []int
-	f := strings.ToLower(m.filter)
 	for i, c := range m.board.Columns[ci].Cards {
-		if f == "" || strings.Contains(strings.ToLower(c.Title+" "+c.Workflow+" "+c.Description), f) {
+		if m.match(c) {
 			out = append(out, i)
 		}
 	}
@@ -132,6 +136,13 @@ func (m *Model) cur() (ci, idx int, ok bool) {
 	return m.col, v[m.sel[m.col]], true
 }
 
+func (m *Model) curCard() *board.Card {
+	if ci, idx, ok := m.cur(); ok {
+		return &m.board.Columns[ci].Cards[idx]
+	}
+	return nil
+}
+
 // focus moves the cursor onto the card with id.
 func (m *Model) focus(id string) {
 	ci, idx, ok := m.board.Find(id)
@@ -154,6 +165,36 @@ func (m *Model) card(id string) *board.Card {
 	return &m.board.Columns[ci].Cards[idx]
 }
 
+func (m *Model) workflow(name string) runner.Workflow {
+	for _, w := range m.wfs {
+		if w.Name == name {
+			return w
+		}
+	}
+	return runner.Workflow{Name: name, Steps: runner.Steps(m.dir, name)}
+}
+
+func (m *Model) activeRuns() int {
+	n := 0
+	for _, rs := range m.runs {
+		if rs.active() {
+			n++
+		}
+	}
+	return n
+}
+
+func firstLine(s string) string { return strings.SplitN(s, "\n", 2)[0] }
+
+func projectName(dir string) string { return filepath.Base(dir) }
+
+func shortDir(d string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(d, home) {
+		return "~" + strings.TrimPrefix(d, home)
+	}
+	return d
+}
+
 // ---- runs ----
 
 func startCmd(bin, dir string, c board.Card) tea.Cmd {
@@ -173,6 +214,10 @@ func waitEvent(id string, ch <-chan runner.Event) tea.Cmd {
 	}
 }
 
+func tickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
 // startRun starts the workflow of card id unless one is already running.
 func (m *Model) startRun(id string) tea.Cmd {
 	c := m.card(id)
@@ -183,15 +228,44 @@ func (m *Model) startRun(id string) tea.Cmd {
 		m.msg = "cette carte n'a pas de workflow"
 		return nil
 	}
-	if rs := m.runs[id]; rs != nil && (rs.starting || rs.status == board.StatusRunning) {
+	if rs := m.runs[id]; rs != nil && rs.active() {
 		m.msg = "run déjà en cours"
 		return nil
 	}
-	m.runs[id] = &runState{starting: true, status: board.StatusRunning}
+	m.runs[id] = newRunState(m.workflow(c.Workflow).Steps, c.Inputs)
 	c.LastRun = &board.LastRun{Status: board.StatusRunning, At: time.Now()}
 	m.save()
 	m.msg = "démarrage de " + c.Workflow + "…"
-	return startCmd(m.bin, m.dir, *c)
+	cmds := []tea.Cmd{startCmd(m.bin, m.dir, *c)}
+	if !m.ticking {
+		m.ticking = true
+		cmds = append(cmds, tickCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// launch moves the card to the first execution column and runs it.
+func (m *Model) launch(id string) tea.Cmd {
+	c := m.card(id)
+	if c == nil {
+		return nil
+	}
+	if c.Workflow == "" {
+		m.msg = "cette carte n'a pas de workflow"
+		return nil
+	}
+	if rs := m.runs[id]; rs != nil && rs.active() {
+		m.msg = "run déjà en cours"
+		return nil
+	}
+	if rc := m.board.RunColumn(); rc >= 0 {
+		if ci, idx, ok := m.board.Find(id); ok && ci != rc {
+			m.board.Move(ci, idx, rc)
+			m.clamp()
+		}
+	}
+	m.focus(id)
+	return m.startRun(id)
 }
 
 func (m *Model) onEvent(msg runEventMsg) tea.Cmd {
@@ -199,29 +273,8 @@ func (m *Model) onEvent(msg runEventMsg) tea.Cmd {
 	if rs == nil {
 		return nil
 	}
-	ev := msg.ev
-	switch ev.Kind {
-	case runner.KindStepStarted:
-		rs.lines = append(rs.lines, sPurple.Render("→ "+ev.Step))
-	case runner.KindStepDone:
-		st := sOK
-		if ev.Status != "completed" {
-			st = sBad
-		}
-		rs.lines = append(rs.lines, st.Render(fmt.Sprintf("✓ %s: %s", ev.Step, ev.Status)))
-	case runner.KindOutput:
-		if ev.Stream == "err" {
-			rs.lines = append(rs.lines, sBad.Render(ev.Line))
-		} else {
-			rs.lines = append(rs.lines, ev.Line)
-		}
-	case runner.KindAsk:
-		rs.ask = ev.Prompt
-	case runner.KindDone:
-		rs.status = ev.Status
-		rs.ask = ""
-		rs.err = ev.Error
-		m.finish(msg.card, ev)
+	if rs.apply(msg.ev, time.Now()) {
+		m.finish(msg.card, msg.ev)
 		m.refreshRun()
 		return nil
 	}
@@ -236,11 +289,15 @@ func (m *Model) finish(id string, ev runner.Event) {
 		return
 	}
 	c := &m.board.Columns[ci].Cards[idx]
-	runID := ""
-	if rs := m.runs[id]; rs != nil && rs.run != nil {
-		runID = rs.run.ID
+	rs := m.runs[id]
+	runID, secs := "", 0
+	if rs != nil {
+		if rs.run != nil {
+			runID = rs.run.ID
+		}
+		secs = int(rs.elapsed(time.Now()).Seconds())
 	}
-	c.LastRun = &board.LastRun{ID: runID, Status: ev.Status, At: time.Now()}
+	c.LastRun = &board.LastRun{ID: runID, Status: ev.Status, At: time.Now(), Secs: secs}
 	target := ""
 	switch ev.Status {
 	case board.StatusCompleted:
@@ -249,44 +306,47 @@ func (m *Model) finish(id string, ev runner.Event) {
 		target = m.board.Columns[ci].OnFailure
 	}
 	m.msg = fmt.Sprintf("%s : %s", c.Title, ev.Status)
+	hadFocus := false
+	if cc := m.curCard(); cc != nil && cc.ID == id {
+		hadFocus = true
+	}
 	if to := m.board.ColumnIndex(target); to >= 0 && to != ci {
 		m.board.Move(ci, idx, to)
 	}
 	m.save()
 	m.clamp()
-}
-
-func (m *Model) runContent() string {
-	rs := m.runs[m.runCard]
-	if rs == nil {
-		return ""
-	}
-	out := strings.Join(rs.lines, "\n")
-	if rs.err != "" {
-		out += "\n" + sBad.Render(rs.err)
-	}
-	return out
-}
-
-func (m *Model) refreshRun() {
-	if m.mode != modeRun {
-		return
-	}
-	atBottom := m.vp.AtBottom()
-	m.vp.SetContent(m.runContent())
-	if atBottom {
-		m.vp.GotoBottom()
+	if hadFocus {
+		m.focus(id) // the cursor follows the card
 	}
 }
 
 // ---- update ----
 
+func (m *Model) resize() {
+	lw, rw := m.runWidths()
+	_ = lw
+	m.vp.Width = rw - 4
+	m.vp.Height = m.h - 3 - 3
+	if m.vp.Height < 1 {
+		m.vp.Height = 1
+	}
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.vp.Width, m.vp.Height = m.w-4, m.h-6
+		m.resize()
+		m.refreshRun()
 		return m, nil
+	case tickMsg:
+		m.frame++
+		if m.activeRuns() == 0 && !m.anyStarting() {
+			m.ticking = false
+			return m, nil
+		}
+		m.refreshRun()
+		return m, tickCmd()
 	case runStartedMsg:
 		rs := m.runs[msg.card]
 		if rs == nil {
@@ -294,10 +354,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rs.starting = false
 		if msg.err != nil {
-			rs.status = board.StatusFailed
-			rs.err = msg.err.Error()
-			m.finish(msg.card, runner.Event{Kind: runner.KindDone, Status: "failed", Error: rs.err})
-			m.msg = "échec du lancement : " + firstLine(rs.err)
+			ev := runner.Event{Kind: runner.KindDone, Status: "failed", Error: msg.err.Error()}
+			rs.apply(ev, time.Now())
+			m.finish(msg.card, ev)
+			m.msg = "échec du lancement : " + firstLine(msg.err.Error())
+			m.refreshRun()
 			return m, nil
 		}
 		rs.run = msg.run
@@ -327,6 +388,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = modeBoard
 			case "esc":
 				m.filter = ""
+				m.filterIn.SetValue("")
 				m.mode = modeBoard
 			default:
 				var cmd tea.Cmd
@@ -346,7 +408,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func firstLine(s string) string { return strings.SplitN(s, "\n", 2)[0] }
+func (m *Model) anyStarting() bool {
+	for _, rs := range m.runs {
+		if rs.starting {
+			return true
+		}
+	}
+	return false
+}
 
 func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.msg = ""
@@ -354,26 +423,26 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		for _, rs := range m.runs {
-			if rs.run != nil && rs.status == board.StatusRunning {
+			if rs.run != nil && rs.active() {
 				_ = rs.run.Cancel()
 			}
 		}
 		return m, tea.Quit
 	case "?":
 		m.mode = modeHelp
-	case "left", "h":
+	case "left":
 		if m.col > 0 {
 			m.col--
 		}
-	case "right", "l":
+	case "right":
 		if m.col < nc-1 {
 			m.col++
 		}
-	case "up", "k":
+	case "up":
 		if m.sel[m.col] > 0 {
 			m.sel[m.col]--
 		}
-	case "down", "j":
+	case "down":
 		if m.sel[m.col] < len(m.vis(m.col))-1 {
 			m.sel[m.col]++
 		}
@@ -390,40 +459,42 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeForm
 		return m, m.form.focusCmd()
 	case "e":
-		if ci, idx, ok := m.cur(); ok {
-			c := m.board.Columns[ci].Cards[idx]
-			m.form = newForm(m, &c)
+		if c := m.curCard(); c != nil {
+			m.form = newForm(m, c)
 			m.mode = modeForm
 			return m, m.form.focusCmd()
 		}
 	case "d":
-		if ci, idx, ok := m.cur(); ok {
-			m.confirmCardID = m.board.Columns[ci].Cards[idx].ID
+		if c := m.curCard(); c != nil {
+			m.confirmCardID = c.ID
 			m.mode = modeConfirm
 		}
-	case "x":
-		if ci, idx, ok := m.cur(); ok {
-			return m, m.startRun(m.board.Columns[ci].Cards[idx].ID)
+	case "enter":
+		if c := m.curCard(); c != nil {
+			if rs := m.runs[c.ID]; rs != nil && rs.active() {
+				m.openRun(c.ID)
+				break
+			}
+			return m, m.launch(c.ID)
+		}
+	case "r":
+		if c := m.curCard(); c != nil {
+			return m, m.launch(c.ID)
+		}
+	case "l":
+		if c := m.curCard(); c != nil {
+			if m.runs[c.ID] == nil {
+				m.msg = "aucun log : lancez le workflow avec ↵"
+				break
+			}
+			m.openRun(c.ID)
 		}
 	case "c":
-		if ci, idx, ok := m.cur(); ok {
-			if rs := m.runs[m.board.Columns[ci].Cards[idx].ID]; rs != nil && rs.run != nil && rs.status == board.StatusRunning {
+		if c := m.curCard(); c != nil {
+			if rs := m.runs[c.ID]; rs != nil && rs.run != nil && rs.active() {
 				_ = rs.run.Cancel()
 				m.msg = "annulation…"
 			}
-		}
-	case "enter":
-		if ci, idx, ok := m.cur(); ok {
-			id := m.board.Columns[ci].Cards[idx].ID
-			if m.runs[id] == nil {
-				m.msg = "aucune sortie : lancez le workflow avec x"
-				break
-			}
-			m.runCard = id
-			m.mode = modeRun
-			m.vp.Width, m.vp.Height = m.w-4, m.h-6
-			m.vp.SetContent(m.runContent())
-			m.vp.GotoBottom()
 		}
 	case "/":
 		m.filterIn.SetValue(m.filter)
@@ -431,12 +502,14 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.filterIn.Focus()
 	case "esc":
 		m.filter = ""
+		m.filterIn.SetValue("")
 		m.clamp()
 	}
 	return m, nil
 }
 
-// moveCard moves the selected card to the neighbour column; auto-run columns start it.
+// moveCard moves the selected card to the neighbour column; a card flagged
+// auto-run entering an execution column starts its workflow.
 func (m *Model) moveCard(d int) tea.Cmd {
 	ci, idx, ok := m.cur()
 	to := ci + d
@@ -449,7 +522,7 @@ func (m *Model) moveCard(d int) tea.Cmd {
 	m.clamp()
 	m.focus(id)
 	if m.board.Columns[to].AutoRun {
-		if c := m.card(id); c != nil && c.Workflow != "" {
+		if c := m.card(id); c != nil && c.AutoRun && c.Workflow != "" {
 			return m.startRun(id)
 		}
 	}
@@ -466,59 +539,12 @@ func (m *Model) reorder(d int) {
 	}
 }
 
-func (m *Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	rs := m.runs[m.runCard]
-	if rs != nil && rs.ask != "" && rs.run != nil {
-		switch msg.String() {
-		case "esc":
-		case "ctrl+d":
-			_ = rs.run.Answer(runner.EOF)
-			rs.ask = ""
-			return m, nil
-		case "enter":
-			txt := m.answer.Value()
-			rs.lines = append(rs.lines, sDim.Render("› "+txt))
-			_ = rs.run.Answer(txt)
-			rs.ask = ""
-			m.answer.SetValue("")
-			m.refreshRun()
-			return m, nil
-		default:
-			m.answer.Focus()
-			var cmd tea.Cmd
-			m.answer, cmd = m.answer.Update(msg)
-			return m, cmd
-		}
-	}
-	switch msg.String() {
-	case "esc", "q":
-		m.mode = modeBoard
-	case "c":
-		if rs != nil && rs.run != nil && rs.status == board.StatusRunning {
-			_ = rs.run.Cancel()
-		}
-	case "r":
-		if rs != nil && rs.status != board.StatusRunning && !rs.starting {
-			id := m.runCard
-			delete(m.runs, id)
-			cmd := m.startRun(id)
-			m.vp.SetContent("")
-			return m, cmd
-		}
-	default:
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(msg)
-		return m, cmd
-	}
-	return m, nil
-}
-
 // ---- view ----
 
 func (m *Model) View() string {
 	switch m.mode {
 	case modeForm:
-		return m.form.view(m.w, m.h)
+		return m.viewForm()
 	case modeRun:
 		return m.viewRun()
 	case modeHelp:
@@ -527,175 +553,22 @@ func (m *Model) View() string {
 	return m.viewBoard()
 }
 
-func statusBadge(rs *runState, c board.Card) string {
-	st := ""
-	if rs != nil {
-		st = rs.status
-	} else if c.LastRun != nil {
-		st = c.LastRun.Status
-		if st == board.StatusRunning { // stale: left over from a previous session
-			st = board.StatusCancelled
-		}
-	}
-	switch st {
-	case board.StatusRunning:
-		return sRun.Render("⏵")
-	case board.StatusCompleted:
-		return sOK.Render("✓")
-	case board.StatusFailed:
-		return sBad.Render("✗")
-	case board.StatusCancelled:
-		return sDim.Render("⊘")
-	}
-	return ""
-}
-
-func (m *Model) viewBoard() string {
-	n := len(m.board.Columns)
-	header := sLogo.Render("todo") + " " + sDim.Render(shortDir(m.dir))
-	if m.filter != "" {
-		header += "  " + sRun.Render("filtre: "+m.filter)
-	}
-	areaH := m.h - 2
-	cw := (m.w - (n - 1)) / n
-	cols := make([]string, n)
-	for ci, col := range m.board.Columns {
-		cols[ci] = m.renderColumn(ci, col, cw, areaH)
-	}
-	parts := make([]string, 0, 2*n)
-	for i, c := range cols {
-		if i > 0 {
-			parts = append(parts, " ")
-		}
-		parts = append(parts, c)
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-
-	var foot string
-	switch m.mode {
-	case modeFilter:
-		foot = m.filterIn.View()
-	case modeConfirm:
-		foot = sBad.Render("Supprimer cette carte ? ") + hint("y", "oui") + " " + hint("autre", "non")
-	default:
-		foot = hint("n", "nouv.") + " " + hint("e", "éditer") + " " + hint("x", "run") + " " +
-			hint("H/L", "déplacer") + " " + hint("enter", "sortie") + " " + hint("?", "aide") + " " + hint("q", "quitter")
-		if m.msg != "" {
-			foot = sRun.Render(fit(m.msg, m.w))
-		}
-	}
-	return header + "\n" + body + "\n" + ansi.Truncate(foot, m.w, "")
-}
-
-func shortDir(d string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(d, home) {
-		return "~" + strings.TrimPrefix(d, home)
-	}
-	return d
-}
-
-func (m *Model) renderColumn(ci int, col board.Column, cw, areaH int) string {
-	focused := ci == m.col
-	border := cBorder
-	if focused {
-		border = cAccent
-	}
-	inner := cw - 2
-	title := strings.ToUpper(col.Name)
-	if col.AutoRun {
-		title += " ⚡"
-	}
-	vis := m.vis(ci)
-	head := sBold.Foreground(cPurple).Render(fit(fmt.Sprintf("%s (%d)", title, len(vis)), inner))
-
-	const cardH = 4
-	capacity := (areaH - 2 - 1) / cardH
-	if capacity < 1 {
-		capacity = 1
-	}
-	start := 0
-	if m.sel[ci] >= capacity {
-		start = m.sel[ci] - capacity + 1
-	}
-	lines := []string{head}
-	for p := start; p < len(vis) && p < start+capacity; p++ {
-		c := col.Cards[vis[p]]
-		bc, fg := cBorder, cText
-		if focused && p == m.sel[ci] {
-			bc = cPink
-		}
-		sub := sDim.Render("—")
-		if c.Workflow != "" {
-			sub = sPurple.Render("⚙ " + c.Workflow)
-		}
-		badge := statusBadge(m.runs[c.ID], c)
-		top := fit(c.Title, inner-4)
-		if badge != "" {
-			top = fit(c.Title, inner-6) + " " + badge
-		}
-		content := lipgloss.NewStyle().Foreground(fg).Render(top) + "\n" + fit(sub, inner-4)
-		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(bc).Width(inner - 2).Render(content)
-		lines = append(lines, box)
-	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).
-		Width(inner).Height(areaH - 2).Render(strings.Join(lines, "\n"))
-}
-
-func (m *Model) viewRun() string {
-	c := m.card(m.runCard)
-	title, wf := "?", ""
-	if c != nil {
-		title, wf = c.Title, c.Workflow
-	}
-	rs := m.runs[m.runCard]
-	st := ""
-	if rs != nil {
-		st = rs.status
-		if rs.starting {
-			st = "démarrage"
-		}
-	}
-	head := sLogo.Render("run") + " " + sBold.Render(title) + " " + sPurple.Render("⚙ "+wf) + " " + sRun.Render(st)
-	body := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBorder).
-		Width(m.w - 2).Height(m.h - 4).Render(m.vp.View())
-	foot := hint("↑↓", "défiler") + " " + hint("c", "annuler") + " " + hint("r", "relancer") + " " + hint("esc", "retour")
-	if rs != nil && rs.ask != "" {
-		foot = sRun.Render(rs.ask) + " " + m.answer.View()
-	}
-	return head + "\n" + body + "\n" + foot
-}
-
 func (m *Model) viewHelp() string {
 	keys := [][2]string{
-		{"←→ h l", "changer de colonne"}, {"↑↓ j k", "changer de carte"},
-		{"H L", "déplacer la carte (colonne auto-run : lance le workflow)"},
-		{"K J", "réordonner dans la colonne"}, {"n / e / d", "nouvelle / éditer / supprimer"},
-		{"x", "exécuter le workflow de la carte"}, {"c", "annuler le run"},
-		{"enter", "voir la sortie du run"}, {"/  esc", "filtrer / effacer le filtre"},
-		{"q", "quitter (annule les runs en cours)"},
+		{"← ↑ ↓ →", "naviguer"},
+		{"↵", "lancer le workflow (la carte passe en colonne d'exécution)"},
+		{"H L", "déplacer la carte (carte « auto » : lance en colonne d'exécution)"},
+		{"K J", "réordonner dans la colonne"},
+		{"n e d", "nouvelle / éditer / supprimer"},
+		{"l", "logs du run"}, {"r", "relancer"}, {"c", "annuler le run"},
+		{"/  esc", "rechercher / effacer"}, {"q", "quitter (annule les runs en cours)"},
 	}
 	var b strings.Builder
-	b.WriteString(sLogo.Render("todo") + " " + sDim.Render("aide") + "\n\n")
+	b.WriteString(sBadge.Render("TODO") + " " + sDim.Render("aide") + "\n\n")
 	for _, k := range keys {
-		b.WriteString(sKey.Render(fit(k[0], 8)) + " " + k[1] + "\n")
+		b.WriteString(sBold.Render(fit(k[0], 9)) + " " + sDim.Render(k[1]) + "\n")
 	}
-	b.WriteString("\n" + sDim.Render("Board : "+board.Path(m.dir)))
+	b.WriteString("\n" + sDim.Render("Board  : "+board.Path(m.dir)))
 	b.WriteString("\n" + sDim.Render("Config : "+config.Path()))
-	b.WriteString("\n\n" + sDim.Render("Colonnes : "+columnsSummary(m.board)))
 	return b.String()
-}
-
-func columnsSummary(b *board.Board) string {
-	names := make([]string, len(b.Columns))
-	for i, c := range b.Columns {
-		names[i] = c.Name
-	}
-	return strings.Join(names, " · ")
-}
-
-// Workflows returns the workflow names known to the model (sorted).
-func (m *Model) Workflows() []string {
-	out := append([]string(nil), m.wfs...)
-	sort.Strings(out)
-	return out
 }

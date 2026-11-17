@@ -7,55 +7,107 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"todo/internal/board"
+	"todo/internal/runner"
 )
 
 const (
 	fTitle = iota
-	fDesc
+	fColumn
 	fWorkflow
 	fInputs
+	fAuto
 	fCount
 )
 
+const wfRows = 4
+
 type form struct {
-	editID string // empty when creating
-	col    int
-	inputs [fCount]textinput.Model // fWorkflow is unused (selector)
-	wfs    []string                // "" first = no workflow
-	wfIdx  int
-	focus  int
-	card   board.Card
+	editID    string
+	card      board.Card
+	title     textinput.Model
+	inputs    textinput.Model
+	filter    textinput.Model
+	filtering bool
+	col       int
+	cols      []string
+	runCol    string
+	wfs       []runner.Workflow // wfs[0] is "no workflow"
+	shown     []int
+	pos       int
+	auto      bool
+	focus     int
+	err       string
+}
+
+func newInput(placeholder string) textinput.Model {
+	t := textinput.New()
+	t.Prompt = ""
+	t.Placeholder = placeholder
+	t.CharLimit = 500
+	return t
 }
 
 func newForm(m *Model, c *board.Card) *form {
-	f := &form{col: m.col, wfs: append([]string{""}, m.wfs...)}
-	for i := range f.inputs {
-		f.inputs[i] = textinput.New()
-		f.inputs[i].Prompt = ""
-		f.inputs[i].CharLimit = 500
+	f := &form{col: m.col, auto: true}
+	for _, col := range m.board.Columns {
+		f.cols = append(f.cols, col.Name)
 	}
-	f.inputs[fTitle].Placeholder = "Titre"
-	f.inputs[fDesc].Placeholder = "Description (optionnelle)"
-	f.inputs[fInputs].Placeholder = "clé=valeur, clé2=valeur2"
+	if rc := m.board.RunColumn(); rc >= 0 {
+		f.runCol = m.board.Columns[rc].Name
+	}
+	f.wfs = append([]runner.Workflow{{}}, m.wfs...)
+	f.title = newInput("Titre de la tâche")
+	f.inputs = newInput("clé=valeur, clé2=valeur2")
+	f.filter = newInput("filtre")
 	if c != nil {
-		f.editID = c.ID
-		f.card = *c
-		f.inputs[fTitle].SetValue(c.Title)
-		f.inputs[fDesc].SetValue(c.Description)
-		f.inputs[fInputs].SetValue(formatInputs(c.Inputs))
-		for i, w := range f.wfs {
-			if w == c.Workflow {
-				f.wfIdx = i
+		f.editID, f.card, f.auto = c.ID, *c, c.AutoRun
+		f.title.SetValue(c.Title)
+		f.inputs.SetValue(formatInputs(c.Inputs))
+		f.col, _, _ = m.board.Find(c.ID)
+		if c.Workflow != "" && !hasWorkflow(f.wfs, c.Workflow) {
+			f.wfs = append(f.wfs, m.workflow(c.Workflow))
+		}
+	}
+	f.refilter(c)
+	return f
+}
+
+func hasWorkflow(ws []runner.Workflow, name string) bool {
+	for _, w := range ws {
+		if w.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// refilter recomputes the visible workflows; when c is set the selection lands on its workflow.
+func (f *form) refilter(c *board.Card) {
+	q := strings.ToLower(f.filter.Value())
+	f.shown = f.shown[:0]
+	for i, w := range f.wfs {
+		if q == "" || (i > 0 && strings.Contains(strings.ToLower(w.Name), q)) {
+			f.shown = append(f.shown, i)
+		}
+	}
+	f.pos = 0
+	if c != nil {
+		for p, i := range f.shown {
+			if f.wfs[i].Name == c.Workflow {
+				f.pos = p
 			}
 		}
-		if c.Workflow != "" && f.wfIdx == 0 { // workflow not found on disk: keep it
-			f.wfs = append(f.wfs, c.Workflow)
-			f.wfIdx = len(f.wfs) - 1
-		}
 	}
-	return f
+}
+
+func (f *form) selected() string {
+	if f.pos < len(f.shown) {
+		return f.wfs[f.shown[f.pos]].Name
+	}
+	return ""
 }
 
 func formatInputs(in map[string]string) string {
@@ -86,101 +138,251 @@ func parseInputs(s string) map[string]string {
 }
 
 func (f *form) focusCmd() tea.Cmd {
-	for i := range f.inputs {
-		f.inputs[i].Blur()
+	f.title.Blur()
+	f.inputs.Blur()
+	f.filter.Blur()
+	switch {
+	case f.focus == fTitle:
+		return f.title.Focus()
+	case f.focus == fInputs:
+		return f.inputs.Focus()
+	case f.focus == fWorkflow && f.filtering:
+		return f.filter.Focus()
 	}
-	if f.focus == fWorkflow {
+	return nil
+}
+
+func (f *form) move(d int) tea.Cmd {
+	f.focus = (f.focus + fCount + d) % fCount
+	f.filtering = false
+	return f.focusCmd()
+}
+
+func (m *Model) submitForm() tea.Cmd {
+	f := m.form
+	title := strings.TrimSpace(f.title.Value())
+	if title == "" {
+		f.err = "le titre est obligatoire"
+		f.focus = fTitle
+		return f.focusCmd()
+	}
+	c := f.card
+	c.Title = title
+	c.Workflow = f.selected()
+	c.Inputs = parseInputs(f.inputs.Value())
+	c.AutoRun = f.auto
+	m.mode = modeBoard
+	if f.editID != "" {
+		if p := m.card(f.editID); p != nil {
+			*p = c
+		}
+		m.save()
 		return nil
 	}
-	return f.inputs[f.focus].Focus()
+	m.board.Add(f.col, c)
+	id := m.board.Columns[f.col].Cards[len(m.board.Columns[f.col].Cards)-1].ID
+	m.save()
+	m.clamp()
+	m.focus(id)
+	if m.board.Columns[f.col].AutoRun && c.AutoRun && c.Workflow != "" {
+		return m.startRun(id)
+	}
+	return nil
 }
 
 func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	f := m.form
-	switch msg.String() {
+	f.err = ""
+	k := msg.String()
+	switch k {
 	case "esc":
+		if f.filtering {
+			f.filtering = false
+			f.filter.SetValue("")
+			f.refilter(nil)
+			return m, f.focusCmd()
+		}
 		m.mode = modeBoard
 		return m, nil
-	case "tab", "down":
-		f.focus = (f.focus + 1) % fCount
-		return m, f.focusCmd()
-	case "shift+tab", "up":
-		f.focus = (f.focus + fCount - 1) % fCount
-		return m, f.focusCmd()
-	case "ctrl+s", "enter":
-		if msg.String() == "enter" && f.focus != fInputs {
-			f.focus++
-			return m, f.focusCmd()
+	case "tab":
+		return m, f.move(1)
+	case "shift+tab":
+		return m, f.move(-1)
+	case "enter", "ctrl+s":
+		return m, m.submitForm()
+	}
+	switch f.focus {
+	case fColumn:
+		switch k {
+		case "left":
+			f.col = (f.col + len(f.cols) - 1) % len(f.cols)
+		case "right":
+			f.col = (f.col + 1) % len(f.cols)
+		case "up":
+			return m, f.move(-1)
+		case "down":
+			return m, f.move(1)
 		}
-		title := strings.TrimSpace(f.inputs[fTitle].Value())
-		if title == "" {
-			f.focus = fTitle
-			m.msg = "le titre est obligatoire"
-			return m, f.focusCmd()
-		}
-		c := f.card
-		c.Title = title
-		c.Description = strings.TrimSpace(f.inputs[fDesc].Value())
-		c.Workflow = f.wfs[f.wfIdx]
-		c.Inputs = parseInputs(f.inputs[fInputs].Value())
-		if f.editID != "" {
-			if p := m.card(f.editID); p != nil {
-				*p = c
+		return m, nil
+	case fWorkflow:
+		switch k {
+		case "up":
+			if f.pos == 0 {
+				return m, f.move(-1)
 			}
-		} else {
-			m.board.Add(f.col, c)
-			m.col = f.col
-			m.focus(m.board.Columns[f.col].Cards[len(m.board.Columns[f.col].Cards)-1].ID)
+			f.pos--
+			return m, nil
+		case "down":
+			if f.pos >= len(f.shown)-1 {
+				return m, f.move(1)
+			}
+			f.pos++
+			return m, nil
+		case "/":
+			if !f.filtering {
+				f.filtering = true
+				return m, f.focusCmd()
+			}
 		}
-		m.save()
-		m.clamp()
-		m.mode = modeBoard
+		if f.filtering {
+			var cmd tea.Cmd
+			f.filter, cmd = f.filter.Update(msg)
+			f.refilter(nil)
+			return m, cmd
+		}
+		return m, nil
+	case fAuto:
+		switch k {
+		case " ", "left", "right", "x":
+			f.auto = !f.auto
+		case "up":
+			return m, f.move(-1)
+		case "down":
+			return m, f.move(1)
+		}
 		return m, nil
 	}
-	if f.focus == fWorkflow {
-		switch msg.String() {
-		case "left", "h":
-			f.wfIdx = (f.wfIdx + len(f.wfs) - 1) % len(f.wfs)
-		case "right", "l", " ":
-			f.wfIdx = (f.wfIdx + 1) % len(f.wfs)
-		}
-		return m, nil
+	// text fields
+	switch k {
+	case "up":
+		return m, f.move(-1)
+	case "down":
+		return m, f.move(1)
 	}
 	var cmd tea.Cmd
-	f.inputs[f.focus], cmd = f.inputs[f.focus].Update(msg)
+	if f.focus == fTitle {
+		f.title, cmd = f.title.Update(msg)
+	} else {
+		f.inputs, cmd = f.inputs.Update(msg)
+	}
 	return m, cmd
 }
 
-func (f *form) view(w, h int) string {
+// ---- view ----
+
+func (f *form) view(w int) []string {
+	mw := 76
+	if mw > w-4 {
+		mw = w - 4
+	}
+	inner := mw - 6
 	label := func(i int, s string) string {
 		if f.focus == i {
 			return sBold.Foreground(cPink).Render("▸ " + s)
 		}
 		return sDim.Render("  " + s)
 	}
-	wf := f.wfs[f.wfIdx]
-	if wf == "" {
-		wf = "(aucun)"
+	bar := func(i int) string {
+		if f.focus == i {
+			return sBold.Foreground(cLilac).Render("▏")
+		}
+		return lipgloss.NewStyle().Foreground(cBorder).Render("▏")
 	}
-	wfLine := sText.Render("◀ " + wf + " ▶")
-	if f.focus != fWorkflow {
-		wfLine = sPurple.Render(wf)
-	}
-	title := "Nouvelle carte"
+	title := "Nouvelle tâche"
+	create := "créer"
 	if f.editID != "" {
-		title = "Éditer la carte"
+		title, create = "Éditer la tâche", "enregistrer"
 	}
-	body := strings.Join([]string{
-		label(fTitle, "Titre"), "  " + f.inputs[fTitle].View(), "",
-		label(fDesc, "Description"), "  " + f.inputs[fDesc].View(), "",
-		label(fWorkflow, "Workflow  (←→ pour changer)"), "  " + wfLine, "",
-		label(fInputs, "Inputs"), "  " + f.inputs[fInputs].View(),
-	}, "\n")
-	bw := w - 4
-	if bw > 80 {
-		bw = 80
+	f.title.Width = inner - 4
+	f.inputs.Width = inner - 4
+	f.filter.Width = inner - 20
+
+	col := sText.Render(f.cols[f.col])
+	if f.focus == fColumn {
+		col = sLav.Render("◀ " + f.cols[f.col] + " ▶")
 	}
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cAccent).Padding(1, 2).Width(bw).Render(body)
-	foot := hint("tab", "champ suivant") + " " + hint("ctrl+s", "enregistrer") + " " + hint("esc", "annuler")
-	return sLogo.Render("todo") + " " + sBold.Render(title) + "\n" + box + "\n" + foot
+
+	hdr := "Workflow AWF (↑↓ pour choisir, / filtrer)"
+	if f.filtering {
+		hdr = "Workflow AWF — filtre : " + f.filter.View()
+	}
+	lines := []string{
+		sBold.Foreground(cLav).Render(title), "",
+		label(fTitle, "Titre"), bar(fTitle) + " " + f.title.View(), "",
+		label(fColumn, "Colonne"), bar(fColumn) + " " + col, "",
+		label(fWorkflow, hdr),
+	}
+	start := 0
+	if f.pos >= wfRows {
+		start = f.pos - wfRows + 1
+	}
+	for r := 0; r < wfRows; r++ {
+		p := start + r
+		if p >= len(f.shown) {
+			lines = append(lines, "")
+			continue
+		}
+		w := f.wfs[f.shown[p]]
+		name, sum := w.Name, w.Summary()
+		if name == "" {
+			name = "(aucun)"
+		}
+		if p == f.pos {
+			l := row("▸ "+name, sum, inner-2)
+			lines = append(lines, lipgloss.NewStyle().Background(cSelBg).Foreground(cLav).Render(" "+fit(ansiPlain(l), inner-2)+" "))
+		} else {
+			lines = append(lines, " "+row("  "+sText.Render(name), sDim.Render(sum), inner-2))
+		}
+	}
+	box := "[ ]"
+	if f.auto {
+		box = sGreen.Render("[x]")
+	}
+	chk := box + " Lancer automatiquement à l'entrée en « " + f.runCol + " »"
+	if f.focus == fAuto {
+		chk = sBold.Foreground(cPink).Render("▸ ") + chk
+	} else {
+		chk = "  " + chk
+	}
+	lines = append(lines, "", label(fInputs, "Entrées (optionnel)"), bar(fInputs)+" "+f.inputs.View(), "", chk, "")
+	if f.err != "" {
+		lines = append(lines, sRed.Render(f.err))
+	} else {
+		lines = append(lines, hints(hint("tab", "champ suivant"), hint("↵", create), hint("esc", "annuler")))
+	}
+	body := make([]string, len(lines))
+	for i, l := range lines {
+		body[i] = fit(l, inner)
+	}
+	boxed := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cViolet).Padding(0, 2).Width(mw - 2).
+		Render(strings.Join(body, "\n"))
+	return strings.Split(boxed, "\n")
+}
+
+func ansiPlain(s string) string {
+	return ansi.Strip(s)
+}
+
+func (m *Model) viewForm() string {
+	bg := plainDim(m.viewBoard())
+	for len(bg) < m.h {
+		bg = append(bg, "")
+	}
+	fl := m.form.view(m.w)
+	x := (m.w - lipgloss.Width(fl[0])) / 2
+	y := (m.h - len(fl)) / 2
+	if y < 0 {
+		y = 0
+	}
+	return strings.Join(overlay(bg, fl, x, y), "\n")
 }

@@ -18,33 +18,38 @@ make build
 ```yaml
 awf: awf
 columns:
-  - {name: Backlog}
-  - {name: Doing, auto_run: true, on_success: Done, on_failure: Failed}
-  - {name: Done}
-  - {name: Failed}
+  - {name: Backlog, color: "#79c0ff"}
+  - {name: À faire, color: "#f2cc60"}
+  - {name: En cours (AWF), color: "#ff7ac6", auto_run: true, on_success: Terminé, on_failure: Terminé}
+  - {name: Terminé, color: "#7ee787"}
 ```
 
-`auto_run` : déplacer une carte dans la colonne lance son workflow. `on_success` / `on_failure` : colonne vers laquelle
-la carte passe à la fin du run (selon la colonne où elle se trouve alors).
+`auto_run` marque la **colonne d'exécution** : `↵` y déplace la carte avant de lancer son workflow, et une carte dont la
+case « Lancer automatiquement » est cochée s'y lance dès qu'elle y entre. `on_success` / `on_failure` : colonne vers
+laquelle la carte passe à la fin du run (l'échec se lit au `✗` sur la carte). Les boards existants gardent leurs colonnes.
 
 ## Touches
 
 | Touche | Action |
 |---|---|
-| ←→ `h` `l` · ↑↓ `j` `k` | naviguer |
-| `H` `L` | déplacer la carte (colonne auto-run : lance le workflow) |
+| ← ↑ ↓ → | naviguer |
+| `↵` | lancer le workflow (la carte passe en colonne d'exécution) ; sur un run en cours : ouvre les logs |
+| `H` `L` | déplacer la carte (carte « auto » + colonne d'exécution : lance le workflow) |
 | `K` `J` | réordonner dans la colonne |
 | `n` `e` `d` | nouvelle / éditer / supprimer (confirmation `y`) |
-| `x` | exécuter le workflow de la carte (`awf run`) |
-| `c` | annuler le run |
-| `enter` | sortie du run (↑↓ défiler · `c` annuler · `r` relancer · `esc` retour ; le run continue) |
-| `/` · `esc` | filtrer / effacer |
+| `l` | logs du run (étapes, sortie horodatée) |
+| `r` | relancer · `c` annuler |
+| `/` · `esc` | rechercher (titre, workflow ; les cartes non trouvées sont atténuées) / effacer |
 | `?` · `q` | aide / quitter (annule les runs en cours) |
 
-Une carte : titre, description, workflow (liste issue de `.awf/workflows`, `~/.config/awf/workflows`, `~/.awf/workflows`)
-et inputs `clé=valeur, …`. Badges : ⏵ en cours · ✓ · ✗ · ⊘ annulé.
+Vue logs : `p` pause/reprise (SIGSTOP/SIGCONT), `c` annuler, `↑↓` défiler, `f` suivre la fin, `r` relancer, `esc` retour
+(le run continue). Les étapes et la progression `étape k/n · %` viennent des `states:` du YAML du workflow.
+
+Formulaire : titre, colonne, workflow (liste filtrable avec `/`, résumé des étapes), entrées `clé=valeur, …` facultatives,
+case de lancement automatique. Badges : spinner en cours · ✓ · ✗ · ⊘ annulé.
 
 ## Limites
 
-- La sortie d'un run n'est conservée qu'en mémoire (statut et id du dernier run sont, eux, enregistrés dans le board).
-- Les steps `mode: conversation` sont gérés (invite `> ` dans la vue du run) ; pas le protocole `@@AWF-ASK@@` d'awf-tui.
+- La sortie d'un run n'est conservée qu'en mémoire (statut, id et durée du dernier run sont enregistrés dans le board).
+- Les steps `mode: conversation` sont gérés (invite `> ` dans la vue des logs) ; pas le protocole `@@AWF-ASK@@` d'awf-tui.
+- Le total d'étapes est déduit du YAML : il peut différer avec des boucles ou des branches.
