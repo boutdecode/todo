@@ -131,6 +131,7 @@ var en = map[string]string{
 	"cli.config":      "config %s: %w",
 	"cli.todos":       "todos %s: %w",
 	"cli.nonotify":    "disable desktop notifications",
+	"cli.version":     "print version and exit",
 
 	// notifications
 	"notif.done":   "✓ %s — done",
@@ -257,6 +258,7 @@ var fr = map[string]string{
 	"cli.config":      "config %s : %w",
 	"cli.todos":       "todos %s : %w",
 	"cli.nonotify":    "désactive les notifications de bureau",
+	"cli.version":     "affiche la version et quitte",
 
 	// notifications
 	"notif.done":   "✓ %s — terminé",

@@ -18,6 +18,9 @@ import (
 	"todo/internal/ui"
 )
 
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	// The language must be known before the flags are declared (their help is translated).
 	lang := i18n.Detect()
@@ -36,7 +39,13 @@ func main() {
 	transparent := flag.Bool("transparent", false, i18n.T("cli.transparent"))
 	noNotify := flag.Bool("no-notify", false, i18n.T("cli.nonotify"))
 	flag.String("lang", lang, i18n.T("cli.lang"))
+	showVersion := flag.Bool("version", false, i18n.T("cli.version"))
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("todo", version)
+		return
+	}
 
 	abs, err := filepath.Abs(*dir)
 	if err != nil {
