@@ -1,7 +1,5 @@
 # todo
 
-[Français](README.fr.md) · **English**
-
 Terminal kanban (Bubble Tea / Lip Gloss) whose cards can run [AWF](https://awf-project.ai) workflows.
 Same family as `awf-tui`.
 
