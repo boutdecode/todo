@@ -12,7 +12,7 @@ make build
 
 ## Stockage
 
-- **Board du projet** : `<dir>/.todo/board.yaml` (versionnable, écriture atomique).
+- **Todos du projet** : `<dir>/.todo/board.yaml` (premier todo) et `<dir>/.todo/<nom>.yaml` pour les suivants (versionnables, écriture atomique). Chaque todo est un board complet ; les workflows d'un todo continuent quand on en affiche un autre.
 - **Config globale** : `~/.config/todo/config.yaml` (`$XDG_CONFIG_HOME`), créée au premier lancement :
   binaire `awf` et colonnes données aux nouveaux boards.
 
@@ -40,6 +40,8 @@ laquelle la carte passe à la fin du run (l'échec se lit au `✗` sur la carte)
 | `n` `e` `d` | nouvelle / éditer / supprimer (confirmation `y`) |
 | `l` | logs du run (étapes, sortie horodatée) |
 | `r` | relancer · `c` annuler |
+| `tab` `maj+tab` | todo suivant / précédent (onglets en haut) |
+| `N` `R` `D` | nouveau / renommer / supprimer le todo (confirmation `y`, jamais le dernier) |
 | `/` · `esc` | rechercher (titre, workflow ; les cartes non trouvées sont atténuées) / effacer |
 | `?` · `q` | aide / quitter (annule les runs en cours) |
 

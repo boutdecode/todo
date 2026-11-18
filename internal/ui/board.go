@@ -188,13 +188,34 @@ func (m *Model) searchBar() string {
 
 func sLilac() lipgloss.Style { return sBold.Foreground(cLilac) }
 
+// tabBar lists the todos; the active one is highlighted, a spinner marks running ones.
+func (m *Model) tabBar() string {
+	var parts []string
+	for i, b := range m.boards {
+		name := b.Title()
+		if m.boardRuns(i) > 0 {
+			name = spin(m.frame) + " " + name
+		}
+		name = " " + name + " "
+		switch {
+		case i == m.active:
+			parts = append(parts, lipgloss.NewStyle().Background(cSelBg).Foreground(cLilac).Bold(true).Render(name))
+		case m.boardRuns(i) > 0:
+			parts = append(parts, sPink.Render(name))
+		default:
+			parts = append(parts, sDim.Render(name))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m *Model) viewBoard() string {
 	n := len(m.board.Columns)
-	right := sDim.Render(itoa(m.activeRuns()) + " workflows actifs")
+	right := sDim.Render("projet: " + projectName(m.dir) + " · " + itoa(m.activeRuns()) + " workflows actifs")
 	if m.version != "" {
 		right += sDim.Render(" · awf v" + m.version)
 	}
-	head := header(sBadge.Render("TODO")+"  "+sDim.Render("projet: "+projectName(m.dir)), right, m.w)
+	head := header(sBadge.Render("TODO")+"  "+m.tabBar(), right, m.w)
 
 	areaH := m.h - 1 - 2
 	bar := m.searchBar()
@@ -216,11 +237,17 @@ func (m *Model) viewBoard() string {
 	var foot string
 	switch {
 	case m.mode == modeConfirm:
-		foot = sRed.Render("Supprimer cette carte ? ") + hint("y", "oui") + "   " + hint("autre", "non")
+		foot = sRed.Render(map[bool]string{true: "Supprimer le todo « " + m.board.Title() + " » et ses cartes ? ", false: "Supprimer cette carte ? "}[m.confirmBoard]) + hint("y", "oui") + "   " + hint("autre", "non")
+	case m.mode == modeName:
+		label := "Nom du nouveau todo : "
+		if m.renaming {
+			label = "Renommer le todo : "
+		}
+		foot = sLilac().Render(label) + m.nameIn.View() + "   " + hint("↵", "valider") + "   " + hint("esc", "annuler")
 	case m.msg != "":
 		foot = sYellow.Render(m.msg)
 	default:
-		foot = hints(hint("←↑↓→", "naviguer"), hint("↵", "lancer workflow"), hint("/", "rechercher"), hint("n", "nouvelle tâche"),
+		foot = hints(hint("←↑↓→", "naviguer"), hint("↵", "lancer workflow"), hint("tab", "todo suivant"), hint("/", "rechercher"), hint("n", "nouvelle tâche"),
 			hint("H L", "déplacer"), hint("l", "logs"), hint("?", "aide"), hint("q", "quitter"))
 	}
 	parts = append(parts, footer(m.w, ansi.Truncate(foot, m.w, "")))

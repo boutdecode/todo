@@ -24,6 +24,10 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRight}
 	case "left":
 		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "ctrl+s":
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
 	}
@@ -56,10 +60,11 @@ func newModel(t *testing.T, script string) *Model {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := board.Load(dir, nil)
+	bs, _ := board.LoadAll(dir, nil)
+	b := bs[0]
 	b.Add(1, board.Card{Title: "Ma tâche", Workflow: "wf", AutoRun: true}) // "À faire"
 	cfg := &config.Config{AWF: bin, Columns: board.DefaultColumns()}
-	m := New(dir, bin, cfg, b)
+	m := New(dir, bin, cfg, bs)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.col = 1
 	return m
@@ -213,5 +218,78 @@ func TestPageBackground(t *testing.T) {
 	m.SetTransparent(true)
 	if strings.Contains(m.View(), bg) {
 		t.Fatal("transparent must not paint the page")
+	}
+}
+
+func typeName(m *Model, name string) {
+	for _, r := range name {
+		m.Update(key(string(r)))
+	}
+	m.Update(key("enter"))
+}
+
+func TestTabsCreateSwitchDelete(t *testing.T) {
+	m := newModel(t, "true")
+	m.Update(key("N"))
+	typeName(m, "Sprint 2")
+	if len(m.boards) != 2 || m.active != 1 || m.board.Title() != "Sprint 2" {
+		t.Fatalf("create: %d %d", len(m.boards), m.active)
+	}
+	if _, err := os.Stat(filepath.Join(m.dir, ".todo", "sprint-2.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if v := m.View(); !strings.Contains(v, "Sprint 2") || !strings.Contains(v, "Board") {
+		t.Fatalf("tab bar:\n%s", v)
+	}
+	m.Update(key("shift+tab"))
+	if m.active != 0 || m.col != 1 {
+		t.Fatalf("cursor not restored: %d col %d", m.active, m.col)
+	}
+	m.Update(key("tab"))
+	m.Update(key("tab"))
+	if m.active != 0 {
+		t.Fatal("tab should cycle")
+	}
+	m.Update(key("tab"))
+	m.Update(key("R"))
+	m.nameIn.SetValue("")
+	typeName(m, "Idées")
+	if m.board.Title() != "Idées" {
+		t.Fatal("rename")
+	}
+	m.Update(key("D"))
+	m.Update(key("y"))
+	if len(m.boards) != 1 || m.board.Title() != "Board" {
+		t.Fatalf("delete: %d", len(m.boards))
+	}
+	if _, err := os.Stat(filepath.Join(m.dir, ".todo", "sprint-2.yaml")); err == nil {
+		t.Fatal("file should be removed")
+	}
+	m.Update(key("D"))
+	m.Update(key("y"))
+	if len(m.boards) != 1 {
+		t.Fatal("last todo must stay")
+	}
+}
+
+func TestRunFinishesInBackgroundTodo(t *testing.T) {
+	m := newModel(t, `sleep 0.2; echo "Workflow started: r9"; echo ok`)
+	id := m.board.Columns[1].Cards[0].ID
+	_, cmd := m.Update(key("enter"))
+	m.Update(key("N"))
+	typeName(m, "Autre")
+	if m.active != 1 {
+		t.Fatal("switch")
+	}
+	drain(m, cmd)
+	if m.active != 1 || len(m.board.Columns[doneIdx].Cards) != 0 {
+		t.Fatal("finish must not touch the active todo")
+	}
+	if ci, _, ok := m.boards[0].Find(id); !ok || ci != doneIdx {
+		t.Fatalf("card should be in Terminé of the first todo (col %d)", ci)
+	}
+	data, _ := os.ReadFile(m.boards[0].File)
+	if !strings.Contains(string(data), "completed") {
+		t.Fatal("first todo not saved")
 	}
 }

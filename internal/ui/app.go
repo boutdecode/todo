@@ -25,6 +25,7 @@ const (
 	modeConfirm
 	modeFilter
 	modeHelp
+	modeName // saisie du nom d'un todo (création / renommage)
 )
 
 type (
@@ -46,7 +47,10 @@ type Model struct {
 	dir, bin string
 	version  string
 	cfg      *config.Config
-	board    *board.Board
+	board    *board.Board // todo actif
+	boards   []*board.Board
+	active   int        // index du todo actif
+	tabs     []tabState // curseur mémorisé par todo
 	wfs      []runner.Workflow
 
 	mode          mode
@@ -63,24 +67,30 @@ type Model struct {
 	vp            viewport.Model
 	answer        textinput.Model
 	confirmCardID string
+	confirmBoard  bool // la confirmation porte sur le todo entier
+	nameIn        textinput.Model
+	renaming      bool
 	frame         int
 	ticking       bool
 	transparent   bool // keep the terminal background
 }
 
 // New builds the model for a project directory.
-func New(dir, bin string, cfg *config.Config, b *board.Board) *Model {
+func New(dir, bin string, cfg *config.Config, boards []*board.Board) *Model {
 	fi := textinput.New()
 	fi.Prompt = ""
 	ans := textinput.New()
 	ans.Prompt = "› "
+	ni := textinput.New()
+	ni.Prompt = ""
 	m := &Model{
-		dir: dir, bin: bin, cfg: cfg, board: b,
+		dir: dir, bin: bin, cfg: cfg, board: boards[0], boards: boards,
 		wfs:  runner.ListWorkflows(dir),
-		sel:  make([]int, len(b.Columns)),
-		runs: map[string]*runState{}, filterIn: fi, answer: ans,
+		sel:  make([]int, len(boards[0].Columns)),
+		runs: map[string]*runState{}, filterIn: fi, answer: ans, nameIn: ni,
 		w: 100, h: 30,
 	}
+	m.tabs = make([]tabState, len(boards))
 	m.resize()
 	return m
 }
@@ -95,8 +105,88 @@ func (m *Model) Init() tea.Cmd { return nil }
 
 // ---- helpers ----
 
+// tabState remembers the cursor of a todo while another one is shown.
+type tabState struct {
+	col int
+	sel []int
+}
+
+// load makes todo i the active one, keeping the cursor of the previous one.
+func (m *Model) load(i int) {
+	m.tabs[m.active] = tabState{col: m.col, sel: m.sel}
+	m.show(i)
+}
+
+// show displays todo i without remembering the previous cursor.
+func (m *Model) show(i int) {
+	m.active, m.board = i, m.boards[i]
+	t := m.tabs[i]
+	m.col, m.sel = t.col, t.sel
+	if len(m.sel) != len(m.board.Columns) {
+		m.sel = make([]int, len(m.board.Columns))
+		m.col = 0
+	}
+	if m.col >= len(m.board.Columns) {
+		m.col = 0
+	}
+	m.clamp()
+}
+
+// switchTab shows the todo d positions away (cyclic) and clears the search.
+func (m *Model) switchTab(d int) {
+	n := len(m.boards)
+	if n < 2 {
+		return
+	}
+	m.filter = ""
+	m.filterIn.SetValue("")
+	m.load(((m.active+d)%n + n) % n)
+}
+
+// boardRuns counts the running workflows of todo i.
+func (m *Model) boardRuns(i int) int {
+	n := 0
+	for id, rs := range m.runs {
+		if _, _, ok := m.boards[i].Find(id); ok && rs.active() {
+			n++
+		}
+	}
+	return n
+}
+
+// createBoard adds a todo named name and shows it.
+func (m *Model) createBoard(name string) {
+	b := board.New(m.dir, name, m.cfg.Columns)
+	m.boards = append(m.boards, b)
+	m.tabs = append(m.tabs, tabState{sel: make([]int, len(b.Columns))})
+	m.load(len(m.boards) - 1)
+	if err := b.Save(); err != nil {
+		m.msg = "sauvegarde impossible : " + err.Error()
+	}
+}
+
+// deleteBoard removes the active todo (never the last one, never while it runs).
+func (m *Model) deleteBoard() {
+	if len(m.boards) < 2 {
+		m.msg = "impossible de supprimer le dernier todo"
+		return
+	}
+	if m.boardRuns(m.active) > 0 {
+		m.msg = "des workflows tournent dans ce todo"
+		return
+	}
+	old := m.board
+	i := m.active
+	m.tabs = append(m.tabs[:i], m.tabs[i+1:]...)
+	m.boards = append(m.boards[:i], m.boards[i+1:]...)
+	m.show(max(i-1, 0))
+	if err := old.Delete(); err != nil {
+		m.msg = "suppression impossible : " + err.Error()
+	}
+}
+
 func (m *Model) save() {
-	if err := m.board.Save(m.dir); err != nil {
+	if err := m.board.Save(); err != nil {
 		m.msg = "sauvegarde impossible : " + err.Error()
 	}
 }
@@ -289,6 +379,17 @@ func (m *Model) onEvent(msg runEventMsg) tea.Cmd {
 
 // finish records the result on the card and applies the column's OnSuccess/OnFailure.
 func (m *Model) finish(id string, ev runner.Event) {
+	if _, _, ok := m.board.Find(id); !ok {
+		// the card lives in another todo: work on it, then come back
+		back := m.active
+		for i, b := range m.boards {
+			if _, _, ok := b.Find(id); ok {
+				m.load(i)
+				defer m.load(back)
+				break
+			}
+		}
+	}
 	ci, idx, ok := m.board.Find(id)
 	if !ok {
 		return
@@ -378,8 +479,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		case modeRun:
 			return m.updateRun(msg)
+		case modeName:
+			switch msg.String() {
+			case "enter":
+				if name := strings.TrimSpace(m.nameIn.Value()); name != "" {
+					if m.renaming {
+						m.board.Name = name
+						m.save()
+					} else {
+						m.createBoard(name)
+					}
+				}
+				m.mode = modeBoard
+			case "esc":
+				m.mode = modeBoard
+			default:
+				var cmd tea.Cmd
+				m.nameIn, cmd = m.nameIn.Update(msg)
+				return m, cmd
+			}
+			return m, nil
 		case modeConfirm:
-			if msg.String() == "y" {
+			if msg.String() == "y" && m.confirmBoard {
+				m.deleteBoard()
+			} else if msg.String() == "y" {
 				if ci, idx, ok := m.board.Find(m.confirmCardID); ok {
 					m.board.Remove(ci, idx)
 					m.save()
@@ -436,6 +559,23 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.mode = modeHelp
+	case "tab":
+		m.switchTab(1)
+	case "shift+tab":
+		m.switchTab(-1)
+	case "N":
+		m.renaming = false
+		m.nameIn.SetValue("")
+		m.mode = modeName
+		return m, m.nameIn.Focus()
+	case "R":
+		m.renaming = true
+		m.nameIn.SetValue(m.board.Title())
+		m.mode = modeName
+		return m, m.nameIn.Focus()
+	case "D":
+		m.confirmBoard = true
+		m.mode = modeConfirm
 	case "left":
 		if m.col > 0 {
 			m.col--
@@ -473,6 +613,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		if c := m.curCard(); c != nil {
 			m.confirmCardID = c.ID
+			m.confirmBoard = false
 			m.mode = modeConfirm
 		}
 	case "enter":
@@ -585,6 +726,8 @@ func (m *Model) viewHelp() string {
 		{"K J", "réordonner dans la colonne"},
 		{"n e d", "nouvelle / éditer / supprimer"},
 		{"l", "logs du run"}, {"r", "relancer"}, {"c", "annuler le run"},
+		{"tab", "todo suivant (maj+tab : précédent)"},
+		{"N R D", "nouveau / renommer / supprimer le todo"},
 		{"/  esc", "rechercher / effacer"}, {"q", "quitter (annule les runs en cours)"},
 	}
 	var b strings.Builder
@@ -592,7 +735,7 @@ func (m *Model) viewHelp() string {
 	for _, k := range keys {
 		b.WriteString(sBold.Render(fit(k[0], 9)) + " " + sDim.Render(k[1]) + "\n")
 	}
-	b.WriteString("\n" + sDim.Render("Board  : "+board.Path(m.dir)))
+	b.WriteString("\n" + sDim.Render("Todos  : "+board.Dir(m.dir)))
 	b.WriteString("\n" + sDim.Render("Config : "+config.Path()))
 	return b.String()
 }

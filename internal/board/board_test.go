@@ -1,6 +1,9 @@
 package board
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestRoundTripAndMoves(t *testing.T) {
 	dir := t.TempDir()
@@ -10,7 +13,7 @@ func TestRoundTripAndMoves(t *testing.T) {
 	}
 	b.Add(0, Card{Title: "a", Workflow: "wf", Inputs: map[string]string{"k": "v"}})
 	b.Add(0, Card{Title: "b"})
-	if err := b.Save(dir); err != nil {
+	if err := b.Save(); err != nil {
 		t.Fatal(err)
 	}
 	b2, err := Load(dir, nil)
@@ -30,5 +33,38 @@ func TestRoundTripAndMoves(t *testing.T) {
 	id := b2.Columns[2].Cards[0].ID
 	if ci, idx, ok := b2.Find(id); !ok || ci != 2 || idx != 0 {
 		t.Fatal("find")
+	}
+}
+
+func TestMultipleBoards(t *testing.T) {
+	dir := t.TempDir()
+	all, err := LoadAll(dir, nil)
+	if err != nil || len(all) != 1 || all[0].Title() != "Board" {
+		t.Fatalf("empty: %v %v", err, all)
+	}
+	all[0].Add(0, Card{Title: "x"})
+	if err := all[0].Save(); err != nil {
+		t.Fatal(err)
+	}
+	b := New(dir, "Sprint 2", nil)
+	b2 := New(dir, "Sprint 2", nil)
+	if filepath.Base(b.File) != "sprint-2.yaml" {
+		t.Fatalf("file %s", b.File)
+	}
+	if err := b.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if b2 = New(dir, "Sprint 2", nil); filepath.Base(b2.File) != "sprint-2-2.yaml" {
+		t.Fatalf("collision %s", b2.File)
+	}
+	all, err = LoadAll(dir, nil)
+	if err != nil || len(all) != 2 || all[0].Title() != "Board" || all[1].Title() != "Sprint 2" || len(all[0].Columns[0].Cards) != 1 {
+		t.Fatalf("reload: %v %+v", err, all)
+	}
+	if err := all[1].Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ = LoadAll(dir, nil); len(all) != 1 {
+		t.Fatal("delete")
 	}
 }

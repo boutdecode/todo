@@ -32,11 +32,11 @@ func main() {
 	if *awf != "" {
 		cfg.AWF = *awf
 	}
-	b, err := board.Load(abs, cfg.Columns)
+	boards, err := board.LoadAll(abs, cfg.Columns)
 	if err != nil {
-		fatal(fmt.Errorf("board %s : %w", board.Path(abs), err))
+		fatal(fmt.Errorf("board %s : %w", board.Dir(abs), err))
 	}
-	model := ui.New(abs, cfg.AWF, cfg, b)
+	model := ui.New(abs, cfg.AWF, cfg, boards)
 	model.SetTransparent(*transparent || cfg.Transparent)
 	model.SetVersion(runner.Version(cfg.AWF))
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
