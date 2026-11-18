@@ -38,7 +38,7 @@ jobs:
         run: |
           name="todo_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
           mkdir -p "dist/$name"
-          go build -trimpath -ldflags "-s -w" -o "dist/$name/todo" ./cmd/todo
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/$name/todo" ./cmd/todo
           cp README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
