@@ -14,6 +14,7 @@ import (
 	"todo/internal/board"
 	"todo/internal/config"
 	"todo/internal/i18n"
+	"todo/internal/notify"
 	"todo/internal/runner"
 )
 
@@ -42,6 +43,11 @@ type (
 	}
 	tickMsg time.Time
 )
+
+// Notifier raises desktop notifications; *notify.Notifier implements it.
+type Notifier interface {
+	Show(key string, kind notify.Kind, summary, body string)
+}
 
 // Model is the root Bubble Tea model.
 type Model struct {
@@ -74,6 +80,10 @@ type Model struct {
 	frame         int
 	ticking       bool
 	transparent   bool // keep the terminal background
+
+	nt        Notifier // nil: no notifications
+	focusSeen bool     // the terminal reports focus changes
+	focused   bool     // the window has the focus (only meaningful once focusSeen)
 }
 
 // New builds the model for a project directory.
@@ -98,6 +108,74 @@ func New(dir, bin string, cfg *config.Config, boards []*board.Board) *Model {
 
 // SetTransparent keeps the terminal's own background instead of painting the mockup's.
 func (m *Model) SetTransparent(t bool) { m.transparent = t }
+
+// SetNotifier enables notifications; they are only raised while the window is unfocused.
+func (m *Model) SetNotifier(n Notifier) { m.nt = n }
+
+// notify raises a notification for card id unless the window has the focus. Terminals
+// that never report focus are treated as unfocused: better a spare notification than a
+// missed question.
+func (m *Model) notify(id string, kind notify.Kind, body string) {
+	if m.nt == nil || m.focused {
+		return
+	}
+	key := "notif.done"
+	switch kind {
+	case notify.Failure:
+		key = "notif.failed"
+	case notify.Ask:
+		key = "notif.ask"
+	}
+	m.nt.Show(id, kind, i18n.T(key, projectName(m.dir)), body)
+}
+
+func (m *Model) notifyEnabled(kind notify.Kind) bool {
+	if m.cfg == nil {
+		return true
+	}
+	switch kind {
+	case notify.Failure:
+		return m.cfg.Notifications.Failure()
+	case notify.Ask:
+		return m.cfg.Notifications.Ask()
+	}
+	return m.cfg.Notifications.Success()
+}
+
+// cardTitle finds the title of card id in any todo (it may belong to a non-active one).
+func (m *Model) cardTitle(id string) string {
+	for _, b := range m.boards {
+		if ci, idx, ok := b.Find(id); ok {
+			return b.Columns[ci].Cards[idx].Title
+		}
+	}
+	return ""
+}
+
+// notifyEnd reports the end of a run (cancellations are silent).
+func (m *Model) notifyEnd(id, title, status, errText string, elapsed time.Duration) {
+	switch status {
+	case board.StatusCompleted:
+		if m.notifyEnabled(notify.Success) {
+			m.notify(id, notify.Success, fmt.Sprintf("%s · %s", title, elapsed.Round(time.Second)))
+		}
+	case board.StatusFailed:
+		if m.notifyEnabled(notify.Failure) {
+			body := title
+			if e := truncate(firstLine(strings.TrimSpace(errText)), 120); e != "" {
+				body += "\n" + e
+			}
+			m.notify(id, notify.Failure, body)
+		}
+	}
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
 
 // SetVersion records the awf version shown in the header.
 func (m *Model) SetVersion(v string) { m.version = v }
@@ -369,10 +447,20 @@ func (m *Model) onEvent(msg runEventMsg) tea.Cmd {
 	if rs == nil {
 		return nil
 	}
+	prevAsk := rs.ask
+	title := m.cardTitle(msg.card)
 	if rs.apply(msg.ev, time.Now()) {
+		m.notifyEnd(msg.card, title, msg.ev.Status, msg.ev.Error, rs.elapsed(time.Now()))
 		m.finish(msg.card, msg.ev)
 		m.refreshRun()
 		return nil
+	}
+	if rs.ask != "" && prevAsk == "" && m.notifyEnabled(notify.Ask) {
+		body := title
+		if msg.ev.Step != "" {
+			body += " · " + msg.ev.Step
+		}
+		m.notify(msg.card, notify.Ask, body)
 	}
 	m.refreshRun()
 	return waitEvent(msg.card, msg.ch)
@@ -464,6 +552,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			ev := runner.Event{Kind: runner.KindDone, Status: "failed", Error: msg.err.Error()}
 			rs.apply(ev, time.Now())
+			m.notifyEnd(msg.card, m.cardTitle(msg.card), ev.Status, ev.Error, rs.elapsed(time.Now()))
 			m.finish(msg.card, ev)
 			m.msg = i18n.T("err.launch", firstLine(msg.err.Error()))
 			m.refreshRun()
@@ -474,7 +563,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(msg.card, msg.run.Events)
 	case runEventMsg:
 		return m, m.onEvent(msg)
+	case tea.FocusMsg:
+		m.focusSeen, m.focused = true, true
+		return m, nil
+	case tea.BlurMsg:
+		m.focusSeen, m.focused = true, false
+		return m, nil
 	case tea.KeyMsg:
+		if m.focusSeen {
+			m.focused = true // a key press proves the window has the focus
+		}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)

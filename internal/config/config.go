@@ -18,7 +18,27 @@ type Config struct {
 	Transparent bool `yaml:"transparent,omitempty"`
 	// Columns is the layout given to new boards.
 	Columns []board.Column `yaml:"columns,omitempty"`
+	// Notifications controls the desktop notifications.
+	Notifications Notifications `yaml:"notifications,omitempty"`
 }
+
+// Notifications selects the events that raise a notification. Absent keys mean true.
+type Notifications struct {
+	Enabled   *bool `yaml:"enabled,omitempty"`
+	OnSuccess *bool `yaml:"on_success,omitempty"`
+	OnFailure *bool `yaml:"on_failure,omitempty"`
+	OnAsk     *bool `yaml:"on_ask,omitempty"`
+	// Terminal is the fallback used without a D-Bus session: osc777 (default), osc9, bell or off.
+	Terminal string `yaml:"terminal,omitempty"`
+}
+
+func on(b *bool) bool { return b == nil || *b }
+
+// Active reports whether notifications are enabled at all.
+func (n Notifications) Active() bool  { return on(n.Enabled) }
+func (n Notifications) Success() bool { return n.Active() && on(n.OnSuccess) }
+func (n Notifications) Failure() bool { return n.Active() && on(n.OnFailure) }
+func (n Notifications) Ask() bool     { return n.Active() && on(n.OnAsk) }
 
 // Path returns the config file location ($XDG_CONFIG_HOME/todo/config.yaml).
 func Path() string {

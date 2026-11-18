@@ -130,6 +130,12 @@ var en = map[string]string{
 	"cli.badlang":     "unsupported language %q (available: en, fr)",
 	"cli.config":      "config %s: %w",
 	"cli.todos":       "todos %s: %w",
+	"cli.nonotify":    "disable desktop notifications",
+
+	// notifications
+	"notif.done":   "✓ %s — done",
+	"notif.failed": "✗ %s — failed",
+	"notif.ask":    "💬 %s — waiting for you",
 }
 
 var fr = map[string]string{
@@ -250,4 +256,10 @@ var fr = map[string]string{
 	"cli.badlang":     "langue non prise en charge %q (disponibles : en, fr)",
 	"cli.config":      "config %s : %w",
 	"cli.todos":       "todos %s : %w",
+	"cli.nonotify":    "désactive les notifications de bureau",
+
+	// notifications
+	"notif.done":   "✓ %s — terminé",
+	"notif.failed": "✗ %s — échec",
+	"notif.ask":    "💬 %s — en attente de vous",
 }

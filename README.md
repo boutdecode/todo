@@ -19,11 +19,34 @@ make build
 ./todo -dir /path/to/awf-project      # default: current directory
 ./todo -awf /path/to/awf              # awf binary (default: config, then "awf")
 ./todo -transparent                   # keep the terminal background (or `transparent: true` in the config)
+./todo -no-notify                     # disable desktop notifications
 ./todo -lang fr                       # interface language: en or fr (default: system language, else en)
 ```
 
 The language is detected from `LC_ALL`, `LC_MESSAGES`, `LANGUAGE`, then `LANG`; `-lang` overrides it. It also sets
 the names of the columns created by default (existing boards and configs keep theirs).
+
+## Notifications
+
+A notification is raised when a run **succeeds**, **fails**, or a `mode: conversation` step **waits for your answer**
+(cancelled runs are silent). They are only sent while the terminal window is unfocused (this needs a terminal that
+reports focus; otherwise they are always sent). There is one notification per card: the end of a run replaces its
+pending question.
+
+- **Linux desktop**: `org.freedesktop.Notifications` over D-Bus (no external command).
+- **No session bus** (SSH, container): falls back to a terminal escape sequence, OSC 777 by default (Ghostty,
+  WezTerm, foot, kitty…); set `notifications.terminal` to `osc9` (iTerm2, Windows Terminal, WezTerm), `bell` or `off`.
+  Inside tmux, sequences go through passthrough: `set -g allow-passthrough on` (and `set -g focus-events on` for focus).
+- **macOS**: no native notification; only the terminal fallback works, if your terminal supports it.
+
+```yaml
+notifications:
+  enabled: true      # false = nothing (same as -no-notify)
+  on_success: true
+  on_failure: true
+  on_ask: true
+  terminal: osc777   # osc777 | osc9 | bell | off
+```
 
 ## Storage
 

@@ -13,6 +13,7 @@ import (
 	"todo/internal/board"
 	"todo/internal/config"
 	"todo/internal/i18n"
+	"todo/internal/notify"
 	"todo/internal/runner"
 	"todo/internal/ui"
 )
@@ -33,6 +34,7 @@ func main() {
 	dir := flag.String("dir", ".", i18n.T("cli.dir"))
 	awf := flag.String("awf", "", i18n.T("cli.awf"))
 	transparent := flag.Bool("transparent", false, i18n.T("cli.transparent"))
+	noNotify := flag.Bool("no-notify", false, i18n.T("cli.nonotify"))
 	flag.String("lang", lang, i18n.T("cli.lang"))
 	flag.Parse()
 
@@ -54,7 +56,15 @@ func main() {
 	model := ui.New(abs, cfg.AWF, cfg, boards)
 	model.SetTransparent(*transparent || cfg.Transparent)
 	model.SetVersion(runner.Version(cfg.AWF))
-	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
+	if !*noNotify && cfg.Notifications.Active() {
+		// No notifier (no bus, no usable fallback) just means no notifications; stay silent
+		// since the alternate screen owns the terminal.
+		if nt, err := notify.New(cfg.Notifications.Terminal); err == nil {
+			model.SetNotifier(nt)
+			defer nt.Close()
+		}
+	}
+	if _, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithReportFocus()).Run(); err != nil {
 		fatal(err)
 	}
 }
