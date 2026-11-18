@@ -20,3 +20,23 @@ func TestLoadCreatesDefaults(t *testing.T) {
 		t.Fatalf("reload: %v %+v", err, c2.Columns)
 	}
 }
+
+func TestNotificationsDefaultsAndOverrides(t *testing.T) {
+	var n Notifications
+	if !n.Active() || !n.Success() || !n.Failure() || !n.Ask() {
+		t.Fatal("absent keys must mean true")
+	}
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("notifications:\n  on_success: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(p)
+	if err != nil || c.Notifications.Success() || !c.Notifications.Failure() {
+		t.Fatalf("%v %+v", err, c.Notifications)
+	}
+	f := false
+	c.Notifications.Enabled = &f
+	if c.Notifications.Failure() || c.Notifications.Ask() {
+		t.Fatal("enabled: false must disable everything")
+	}
+}
