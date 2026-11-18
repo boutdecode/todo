@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"todo/internal/i18n"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,10 +62,10 @@ type Board struct {
 // DefaultColumns is the layout used when neither the board nor the config defines one.
 func DefaultColumns() []Column {
 	return []Column{
-		{Name: "Backlog", Color: "#79c0ff"},
-		{Name: "À faire", Color: "#f2cc60"},
-		{Name: "En cours (AWF)", Color: "#ff7ac6", AutoRun: true, OnSuccess: "Terminé", OnFailure: "Terminé"},
-		{Name: "Terminé", Color: "#7ee787"},
+		{Name: i18n.T("col.backlog"), Color: "#79c0ff"},
+		{Name: i18n.T("col.todo"), Color: "#f2cc60"},
+		{Name: i18n.T("col.doing"), Color: "#ff7ac6", AutoRun: true, OnSuccess: i18n.T("col.done"), OnFailure: i18n.T("col.done")},
+		{Name: i18n.T("col.done"), Color: "#7ee787"},
 	}
 }
 

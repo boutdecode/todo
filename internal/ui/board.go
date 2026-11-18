@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"todo/internal/board"
+	"todo/internal/i18n"
 )
 
 // cardLines builds the text lines of a card (without the frame).
@@ -44,7 +45,7 @@ func (m *Model) cardLines(c board.Card, selected, dimmed bool, tw int) []string 
 			l = "⏸ " + wf
 		}
 		if n > 0 {
-			l += " · étape " + itoa(k) + "/" + itoa(n)
+			l += i18n.T("card.step", k, n)
 		}
 		lines = append(lines, paint(sPink).Render(fit(l, tw)))
 		if n > 0 {
@@ -55,9 +56,9 @@ func (m *Model) cardLines(c board.Card, selected, dimmed bool, tw int) []string 
 	case status == board.StatusCompleted:
 		lines = append(lines, paint(sGreen).Render(fit("✓ "+wf+" · "+fmtDur(secs), tw)))
 	case status == board.StatusFailed:
-		lines = append(lines, paint(sRed).Render(fit("✗ "+wf+" · échec", tw)), paint(sDim).Render(fit("r pour relancer", tw)))
+		lines = append(lines, paint(sRed).Render(fit(i18n.T("card.failed", wf), tw)), paint(sDim).Render(fit(i18n.T("card.retry"), tw)))
 	case status == board.StatusCancelled:
-		lines = append(lines, paint(sDim).Render(fit("⊘ "+wf+" · annulé", tw)), paint(sDim).Render(fit("r pour relancer", tw)))
+		lines = append(lines, paint(sDim).Render(fit(i18n.T("card.cancelled", wf), tw)), paint(sDim).Render(fit(i18n.T("card.retry"), tw)))
 	default:
 		l := "wf: —"
 		if wf != "" {
@@ -69,7 +70,7 @@ func (m *Model) cardLines(c board.Card, selected, dimmed bool, tw int) []string 
 		}
 		lines = append(lines, paint(st).Render(fit(l, tw)))
 		if selected && wf != "" {
-			lines = append(lines, paint(sDim).Render(fit("entrée ↵ pour lancer", tw)))
+			lines = append(lines, paint(sDim).Render(fit(i18n.T("card.enter"), tw)))
 		}
 	}
 	return lines
@@ -166,16 +167,12 @@ func (m *Model) searchBar() string {
 	case m.mode == modeFilter:
 		in = m.filterIn.View()
 	case m.filter == "":
-		in = sDim.Render("rechercher…")
+		in = sDim.Render(i18n.T("search.placeholder"))
 	}
 	if active {
-		word := "résultats"
-		if total <= 1 {
-			word = "résultat"
-		}
-		right = sDim.Render(itoa(total) + " " + word + " · titre, workflow · esc effacer")
+		right = sDim.Render(i18n.N("search.found", total))
 	} else {
-		right = sDim.Render(itoa(total) + " cartes · titre, workflow · / pour chercher")
+		right = sDim.Render(i18n.N("search.idle", total))
 	}
 	border := cBorder
 	if active {
@@ -211,7 +208,7 @@ func (m *Model) tabBar() string {
 
 func (m *Model) viewBoard() string {
 	n := len(m.board.Columns)
-	right := sDim.Render("projet: " + projectName(m.dir) + " · " + itoa(m.activeRuns()) + " workflows actifs")
+	right := sDim.Render(i18n.T("head.project", projectName(m.dir)) + " · " + i18n.N("head.active", m.activeRuns()))
 	if m.version != "" {
 		right += sDim.Render(" · awf v" + m.version)
 	}
@@ -237,18 +234,18 @@ func (m *Model) viewBoard() string {
 	var foot string
 	switch {
 	case m.mode == modeConfirm:
-		foot = sRed.Render(map[bool]string{true: "Supprimer le todo « " + m.board.Title() + " » et ses cartes ? ", false: "Supprimer cette carte ? "}[m.confirmBoard]) + hint("y", "oui") + "   " + hint("autre", "non")
+		foot = sRed.Render(map[bool]string{true: i18n.T("confirm.board", m.board.Title()), false: i18n.T("confirm.card")}[m.confirmBoard]) + hint("y", i18n.T("confirm.yes")) + "   " + hint(i18n.T("confirm.other"), i18n.T("confirm.no"))
 	case m.mode == modeName:
-		label := "Nom du nouveau todo : "
+		label := i18n.T("name.new")
 		if m.renaming {
-			label = "Renommer le todo : "
+			label = i18n.T("name.rename")
 		}
-		foot = sLilac().Render(label) + m.nameIn.View() + "   " + hint("↵", "valider") + "   " + hint("esc", "annuler")
+		foot = sLilac().Render(label) + m.nameIn.View() + "   " + hint("↵", i18n.T("h.confirm")) + "   " + hint("esc", i18n.T("h.cancel"))
 	case m.msg != "":
 		foot = sYellow.Render(m.msg)
 	default:
-		foot = hints(hint("←↑↓→", "naviguer"), hint("↵", "lancer workflow"), hint("tab", "todo suivant"), hint("/", "rechercher"), hint("n", "nouvelle tâche"),
-			hint("H L", "déplacer"), hint("l", "logs"), hint("?", "aide"), hint("q", "quitter"))
+		foot = hints(hint("←↑↓→", i18n.T("h.navigate")), hint("↵", i18n.T("h.run")), hint("tab", i18n.T("h.nexttodo")), hint("/", i18n.T("h.search")), hint("n", i18n.T("h.newtask")),
+			hint("H L", i18n.T("h.move")), hint("l", i18n.T("h.logs")), hint("?", i18n.T("h.help")), hint("q", i18n.T("h.quit")))
 	}
 	parts = append(parts, footer(m.w, ansi.Truncate(foot, m.w, "")))
 	return strings.Join(parts, "\n")

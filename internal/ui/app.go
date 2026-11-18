@@ -13,6 +13,7 @@ import (
 
 	"todo/internal/board"
 	"todo/internal/config"
+	"todo/internal/i18n"
 	"todo/internal/runner"
 )
 
@@ -25,7 +26,7 @@ const (
 	modeConfirm
 	modeFilter
 	modeHelp
-	modeName // saisie du nom d'un todo (création / renommage)
+	modeName // typing a todo name (create / rename)
 )
 
 type (
@@ -49,8 +50,8 @@ type Model struct {
 	cfg      *config.Config
 	board    *board.Board // todo actif
 	boards   []*board.Board
-	active   int        // index du todo actif
-	tabs     []tabState // curseur mémorisé par todo
+	active   int        // index of the active todo
+	tabs     []tabState // remembered cursor per todo
 	wfs      []runner.Workflow
 
 	mode          mode
@@ -67,7 +68,7 @@ type Model struct {
 	vp            viewport.Model
 	answer        textinput.Model
 	confirmCardID string
-	confirmBoard  bool // la confirmation porte sur le todo entier
+	confirmBoard  bool // the confirmation is about the whole todo
 	nameIn        textinput.Model
 	renaming      bool
 	frame         int
@@ -161,18 +162,18 @@ func (m *Model) createBoard(name string) {
 	m.tabs = append(m.tabs, tabState{sel: make([]int, len(b.Columns))})
 	m.load(len(m.boards) - 1)
 	if err := b.Save(); err != nil {
-		m.msg = "sauvegarde impossible : " + err.Error()
+		m.msg = i18n.T("err.save", err.Error())
 	}
 }
 
 // deleteBoard removes the active todo (never the last one, never while it runs).
 func (m *Model) deleteBoard() {
 	if len(m.boards) < 2 {
-		m.msg = "impossible de supprimer le dernier todo"
+		m.msg = i18n.T("err.lastboard")
 		return
 	}
 	if m.boardRuns(m.active) > 0 {
-		m.msg = "des workflows tournent dans ce todo"
+		m.msg = i18n.T("err.boardruns")
 		return
 	}
 	old := m.board
@@ -181,13 +182,13 @@ func (m *Model) deleteBoard() {
 	m.boards = append(m.boards[:i], m.boards[i+1:]...)
 	m.show(max(i-1, 0))
 	if err := old.Delete(); err != nil {
-		m.msg = "suppression impossible : " + err.Error()
+		m.msg = i18n.T("err.delete", err.Error())
 	}
 }
 
 func (m *Model) save() {
 	if err := m.board.Save(); err != nil {
-		m.msg = "sauvegarde impossible : " + err.Error()
+		m.msg = i18n.T("err.save", err.Error())
 	}
 }
 
@@ -303,7 +304,7 @@ func waitEvent(id string, ch <-chan runner.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			ev = runner.Event{Kind: runner.KindDone, Status: "failed", Error: "flux interrompu"}
+			ev = runner.Event{Kind: runner.KindDone, Status: "failed", Error: i18n.T("err.stream")}
 		}
 		return runEventMsg{card: id, ev: ev, ch: ch}
 	}
@@ -320,17 +321,17 @@ func (m *Model) startRun(id string) tea.Cmd {
 		return nil
 	}
 	if c.Workflow == "" {
-		m.msg = "cette carte n'a pas de workflow"
+		m.msg = i18n.T("err.nowf")
 		return nil
 	}
 	if rs := m.runs[id]; rs != nil && rs.active() {
-		m.msg = "run déjà en cours"
+		m.msg = i18n.T("err.running")
 		return nil
 	}
 	m.runs[id] = newRunState(m.workflow(c.Workflow).Steps, c.Inputs)
 	c.LastRun = &board.LastRun{Status: board.StatusRunning, At: time.Now()}
 	m.save()
-	m.msg = "démarrage de " + c.Workflow + "…"
+	m.msg = i18n.T("msg.starting", c.Workflow)
 	cmds := []tea.Cmd{startCmd(m.bin, m.dir, *c)}
 	if !m.ticking {
 		m.ticking = true
@@ -346,11 +347,11 @@ func (m *Model) launch(id string) tea.Cmd {
 		return nil
 	}
 	if c.Workflow == "" {
-		m.msg = "cette carte n'a pas de workflow"
+		m.msg = i18n.T("err.nowf")
 		return nil
 	}
 	if rs := m.runs[id]; rs != nil && rs.active() {
-		m.msg = "run déjà en cours"
+		m.msg = i18n.T("err.running")
 		return nil
 	}
 	if rc := m.board.RunColumn(); rc >= 0 {
@@ -464,12 +465,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ev := runner.Event{Kind: runner.KindDone, Status: "failed", Error: msg.err.Error()}
 			rs.apply(ev, time.Now())
 			m.finish(msg.card, ev)
-			m.msg = "échec du lancement : " + firstLine(msg.err.Error())
+			m.msg = i18n.T("err.launch", firstLine(msg.err.Error()))
 			m.refreshRun()
 			return m, nil
 		}
 		rs.run = msg.run
-		m.msg = "run " + msg.run.ID
+		m.msg = i18n.T("msg.run", msg.run.ID)
 		return m, waitEvent(msg.card, msg.run.Events)
 	case runEventMsg:
 		return m, m.onEvent(msg)
@@ -631,7 +632,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if c := m.curCard(); c != nil {
 			if m.runs[c.ID] == nil {
-				m.msg = "aucun log : lancez le workflow avec ↵"
+				m.msg = i18n.T("msg.nolog")
 				break
 			}
 			m.openRun(c.ID)
@@ -640,7 +641,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if c := m.curCard(); c != nil {
 			if rs := m.runs[c.ID]; rs != nil && rs.run != nil && rs.active() {
 				_ = rs.run.Cancel()
-				m.msg = "annulation…"
+				m.msg = i18n.T("msg.cancel")
 			}
 		}
 	case "/":
@@ -688,7 +689,7 @@ func (m *Model) reorder(d int) {
 
 // ---- view ----
 
-// Marges autour de l'écran (colonnes / lignes).
+// Screen margins (columns / rows).
 const padX, padY = 2, 1
 
 func (m *Model) View() string {
@@ -720,22 +721,22 @@ func (m *Model) render() string {
 
 func (m *Model) viewHelp() string {
 	keys := [][2]string{
-		{"← ↑ ↓ →", "naviguer"},
-		{"↵", "lancer le workflow (la carte passe en colonne d'exécution)"},
-		{"H L", "déplacer la carte (carte « auto » : lance en colonne d'exécution)"},
-		{"K J", "réordonner dans la colonne"},
-		{"n e d", "nouvelle / éditer / supprimer"},
-		{"l", "logs du run"}, {"r", "relancer"}, {"c", "annuler le run"},
-		{"tab", "todo suivant (maj+tab : précédent)"},
-		{"N R D", "nouveau / renommer / supprimer le todo"},
-		{"/  esc", "rechercher / effacer"}, {"q", "quitter (annule les runs en cours)"},
+		{"← ↑ ↓ →", i18n.T("help.nav")},
+		{"↵", i18n.T("help.run")},
+		{"H L", i18n.T("help.move")},
+		{"K J", i18n.T("help.reorder")},
+		{"n e d", i18n.T("help.card")},
+		{"l", i18n.T("help.logs")}, {"r", i18n.T("help.retry")}, {"c", i18n.T("help.cancel")},
+		{"tab", i18n.T("help.tab")},
+		{"N R D", i18n.T("help.todo")},
+		{"/  esc", i18n.T("help.search")}, {"q", i18n.T("help.quit")},
 	}
 	var b strings.Builder
-	b.WriteString(sBadge.Render("TODO") + " " + sDim.Render("aide") + "\n\n")
+	b.WriteString(sBadge.Render("TODO") + " " + sDim.Render(i18n.T("help.title")) + "\n\n")
 	for _, k := range keys {
 		b.WriteString(sBold.Render(fit(k[0], 9)) + " " + sDim.Render(k[1]) + "\n")
 	}
-	b.WriteString("\n" + sDim.Render("Todos  : "+board.Dir(m.dir)))
-	b.WriteString("\n" + sDim.Render("Config : "+config.Path()))
+	b.WriteString("\n" + sDim.Render(i18n.T("help.todos", board.Dir(m.dir))))
+	b.WriteString("\n" + sDim.Render(i18n.T("help.config", config.Path())))
 	return b.String()
 }

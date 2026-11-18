@@ -12,6 +12,7 @@ import (
 
 	"todo/internal/board"
 	"todo/internal/config"
+	"todo/internal/i18n"
 )
 
 func key(s string) tea.KeyMsg {
@@ -62,7 +63,7 @@ func newModel(t *testing.T, script string) *Model {
 	}
 	bs, _ := board.LoadAll(dir, nil)
 	b := bs[0]
-	b.Add(1, board.Card{Title: "Ma tâche", Workflow: "wf", AutoRun: true}) // "À faire"
+	b.Add(1, board.Card{Title: "Ma tâche", Workflow: "wf", AutoRun: true}) // "To do"
 	cfg := &config.Config{AWF: bin, Columns: board.DefaultColumns()}
 	m := New(dir, bin, cfg, bs)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -80,7 +81,7 @@ func TestEnterLaunchesAndMovesToDone(t *testing.T) {
 	}
 	drain(m, cmd)
 	if n := len(m.board.Columns[doneIdx].Cards); n != 1 {
-		t.Fatalf("card should be in Terminé: %+v", m.board.Columns)
+		t.Fatalf("card should be in Done: %+v", m.board.Columns)
 	}
 	if lr := m.board.Columns[doneIdx].Cards[0].LastRun; lr == nil || lr.Status != "completed" || lr.ID != "r1" {
 		t.Fatalf("last run: %+v", lr)
@@ -114,7 +115,7 @@ func TestFailureShowsInDoneColumn(t *testing.T) {
 		t.Fatalf("%+v", m.board.Columns)
 	}
 	m.col = doneIdx
-	if v := m.View(); !strings.Contains(v, "✗") || !strings.Contains(v, "r pour relancer") {
+	if v := m.View(); !strings.Contains(v, "✗") || !strings.Contains(v, "r to retry") {
 		t.Fatalf("failure not shown:\n%s", v)
 	}
 }
@@ -122,7 +123,7 @@ func TestFailureShowsInDoneColumn(t *testing.T) {
 func TestFormCreatesCard(t *testing.T) {
 	m := newModel(t, "true")
 	m.Update(key("n"))
-	for _, r := range "Nouvelle" {
+	for _, r := range "New" {
 		m.Update(key(string(r)))
 	}
 	m.Update(key("ctrl+s"))
@@ -145,12 +146,12 @@ func TestViewsFitTerminal(t *testing.T) {
 			}
 		}
 		check("board")
-		if v := m.View(); !strings.Contains(v, "BACKLOG") && !strings.Contains(v, "Backlog") || !strings.Contains(v, "En cours") || !strings.Contains(v, "entrée ↵") {
+		if v := m.View(); !strings.Contains(v, "BACKLOG") && !strings.Contains(v, "Backlog") || !strings.Contains(v, "In progress") || !strings.Contains(v, "enter ↵") {
 			t.Fatalf("missing board content:\n%s", v)
 		}
 		m.Update(key("n"))
 		check("form")
-		if !strings.Contains(m.View(), "Nouvelle tâche") {
+		if !strings.Contains(m.View(), "New task") {
 			t.Fatal("form title")
 		}
 		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -159,7 +160,7 @@ func TestViewsFitTerminal(t *testing.T) {
 			m.Update(key(string(r)))
 		}
 		check("filter")
-		if !strings.Contains(m.View(), "1 résultat") {
+		if !strings.Contains(m.View(), "1 result") {
 			t.Fatalf("search bar:\n%s", m.View())
 		}
 	}
@@ -182,7 +183,7 @@ func TestRunViewAndLogs(t *testing.T) {
 		t.Fatal("l opens the logs")
 	}
 	v := m.View()
-	if !strings.Contains(v, "Étapes") || !strings.Contains(v, "Logs (stream)") || !strings.Contains(v, "retour board") {
+	if !strings.Contains(v, "Steps") || !strings.Contains(v, "Logs (stream)") || !strings.Contains(v, "back to board") {
 		t.Fatalf("run view:\n%s", v)
 	}
 	m.Update(key("c"))
@@ -286,10 +287,22 @@ func TestRunFinishesInBackgroundTodo(t *testing.T) {
 		t.Fatal("finish must not touch the active todo")
 	}
 	if ci, _, ok := m.boards[0].Find(id); !ok || ci != doneIdx {
-		t.Fatalf("card should be in Terminé of the first todo (col %d)", ci)
+		t.Fatalf("card should be in Done of the first todo (col %d)", ci)
 	}
 	data, _ := os.ReadFile(m.boards[0].File)
 	if !strings.Contains(string(data), "completed") {
 		t.Fatal("first todo not saved")
+	}
+}
+
+func TestFrenchInterface(t *testing.T) {
+	i18n.Set("fr")
+	defer i18n.Set("en")
+	m := newModel(t, "true") // columns are created in French
+	v := m.View()
+	for _, want := range []string{"À faire", "En cours (AWF)", "Terminé", "entrée ↵", "1 carte", "workflow", "todo suivant"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
 	}
 }

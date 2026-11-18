@@ -16,7 +16,7 @@ func TestLoadCreatesDefaults(t *testing.T) {
 		t.Fatal("config file not written")
 	}
 	c2, err := LoadFrom(p)
-	if err != nil || !c2.Columns[2].AutoRun || c2.Columns[2].OnSuccess != "Terminé" {
+	if err != nil || !c2.Columns[2].AutoRun || c2.Columns[2].OnSuccess != "Done" {
 		t.Fatalf("reload: %v %+v", err, c2.Columns)
 	}
 }

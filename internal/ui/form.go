@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"todo/internal/board"
+	"todo/internal/i18n"
 	"todo/internal/runner"
 )
 
@@ -59,9 +60,9 @@ func newForm(m *Model, c *board.Card) *form {
 		f.runCol = m.board.Columns[rc].Name
 	}
 	f.wfs = append([]runner.Workflow{{}}, m.wfs...)
-	f.title = newInput("Titre de la tâche")
-	f.inputs = newInput("clé=valeur, clé2=valeur2")
-	f.filter = newInput("filtre")
+	f.title = newInput(i18n.T("form.titleph"))
+	f.inputs = newInput(i18n.T("form.inputsph"))
+	f.filter = newInput(i18n.T("form.filterph"))
 	if c != nil {
 		f.editID, f.card, f.auto = c.ID, *c, c.AutoRun
 		f.title.SetValue(c.Title)
@@ -162,7 +163,7 @@ func (m *Model) submitForm() tea.Cmd {
 	f := m.form
 	title := strings.TrimSpace(f.title.Value())
 	if title == "" {
-		f.err = "le titre est obligatoire"
+		f.err = i18n.T("form.err.title")
 		f.focus = fTitle
 		return f.focusCmd()
 	}
@@ -298,10 +299,10 @@ func (f *form) view(w int, transparent bool) []string {
 		}
 		return lipgloss.NewStyle().Foreground(cBorder).Render("▏")
 	}
-	title := "Nouvelle tâche"
-	create := "créer"
+	title := i18n.T("form.new")
+	create := i18n.T("form.create")
 	if f.editID != "" {
-		title, create = "Éditer la tâche", "enregistrer"
+		title, create = i18n.T("form.edit"), i18n.T("form.save")
 	}
 	f.title.Width = inner - 4
 	f.inputs.Width = inner - 4
@@ -312,14 +313,14 @@ func (f *form) view(w int, transparent bool) []string {
 		col = sLav.Render("◀ " + f.cols[f.col] + " ▶")
 	}
 
-	hdr := "Workflow AWF (↑↓ pour choisir, / filtrer)"
+	hdr := i18n.T("form.workflow")
 	if f.filtering {
-		hdr = "Workflow AWF — filtre : " + f.filter.View()
+		hdr = i18n.T("form.workflow.filt") + f.filter.View()
 	}
 	lines := []string{
 		sBold.Foreground(cLav).Render(title), "",
-		label(fTitle, "Titre"), bar(fTitle) + " " + f.title.View(), "",
-		label(fColumn, "Colonne"), bar(fColumn) + " " + col, "",
+		label(fTitle, i18n.T("form.field.title")), bar(fTitle) + " " + f.title.View(), "",
+		label(fColumn, i18n.T("form.field.column")), bar(fColumn) + " " + col, "",
 		label(fWorkflow, hdr),
 	}
 	start := 0
@@ -335,7 +336,7 @@ func (f *form) view(w int, transparent bool) []string {
 		w := f.wfs[f.shown[p]]
 		name, sum := w.Name, w.Summary()
 		if name == "" {
-			name = "(aucun)"
+			name = i18n.T("form.none")
 		}
 		if p == f.pos {
 			l := row("▸ "+name, sum, inner-2)
@@ -348,17 +349,17 @@ func (f *form) view(w int, transparent bool) []string {
 	if f.auto {
 		box = sGreen.Render("[x]")
 	}
-	chk := box + " Lancer automatiquement à l'entrée en « " + f.runCol + " »"
+	chk := box + " " + i18n.T("form.auto", f.runCol)
 	if f.focus == fAuto {
 		chk = sBold.Foreground(cPink).Render("▸ ") + chk
 	} else {
 		chk = "  " + chk
 	}
-	lines = append(lines, "", label(fInputs, "Entrées (optionnel)"), bar(fInputs)+" "+f.inputs.View(), "", chk, "")
+	lines = append(lines, "", label(fInputs, i18n.T("form.field.inputs")), bar(fInputs)+" "+f.inputs.View(), "", chk, "")
 	if f.err != "" {
 		lines = append(lines, sRed.Render(f.err))
 	} else {
-		lines = append(lines, hints(hint("tab", "champ suivant"), hint("↵", create), hint("esc", "annuler")))
+		lines = append(lines, hints(hint("tab", i18n.T("h.nextfield")), hint("↵", create), hint("esc", i18n.T("h.cancel"))))
 	}
 	body := make([]string, len(lines))
 	for i, l := range lines {

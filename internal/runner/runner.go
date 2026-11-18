@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"gopkg.in/yaml.v3"
+	"todo/internal/i18n"
 )
 
 // Event kinds.
@@ -57,8 +58,6 @@ const (
 	convPrompt = "> "
 	// EOF ends a conversation step.
 	EOF = "\x04"
-	// ConvPrompt is the question shown while a conversation waits for the user.
-	ConvPrompt = "Conversation — votre message (ctrl+d pour terminer)"
 )
 
 var (
@@ -139,12 +138,12 @@ func Start(bin, dir, name string, inputs map[string]string) (*Run, error) {
 	select {
 	case id := <-idc:
 		if id == "" {
-			return nil, errors.New(withOutput("le run s'est arrêté avant de recevoir son identifiant", r.tailText()))
+			return nil, errors.New(withOutput(i18n.T("err.noid"), r.tailText()))
 		}
 		return r, nil
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
-		return nil, errors.New(withOutput("délai dépassé en attendant l'identifiant du run", r.tailText()))
+		return nil, errors.New(withOutput(i18n.T("err.timeout"), r.tailText()))
 	}
 }
 
@@ -186,7 +185,7 @@ func (r *Run) pump(pr *os.File, ch chan<- Event, idc chan<- string) {
 				r.mu.Lock()
 				r.convAsk = true
 				r.mu.Unlock()
-				ch <- Event{Kind: KindAsk, Step: step, Prompt: ConvPrompt}
+				ch <- Event{Kind: KindAsk, Step: step, Prompt: i18n.T("conv.prompt")}
 				continue
 			}
 			r.addTail(line)
@@ -274,7 +273,7 @@ type Workflow struct {
 	Steps []string
 }
 
-// Summary is "a · b · c" for up to 3 steps, "N étapes" beyond, "" when unknown.
+// Summary is "a · b · c" for up to 3 steps, "N steps" beyond, "" when unknown.
 func (w Workflow) Summary() string {
 	switch {
 	case len(w.Steps) == 0:
@@ -282,7 +281,7 @@ func (w Workflow) Summary() string {
 	case len(w.Steps) <= 3:
 		return strings.Join(w.Steps, " · ")
 	}
-	return fmt.Sprintf("%d étapes", len(w.Steps))
+	return i18n.T("steps.many", len(w.Steps))
 }
 
 func searchDirs(dir string) []string {

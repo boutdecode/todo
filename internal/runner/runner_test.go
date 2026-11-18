@@ -119,7 +119,7 @@ states:
 	if s := (Workflow{Steps: got}).Summary(); s != "a · b" {
 		t.Fatal(s)
 	}
-	if s := (Workflow{Steps: []string{"1", "2", "3", "4"}}).Summary(); s != "4 étapes" {
+	if s := (Workflow{Steps: []string{"1", "2", "3", "4"}}).Summary(); s != "4 steps" {
 		t.Fatal(s)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"todo/internal/board"
+	"todo/internal/i18n"
 	"todo/internal/runner"
 )
 
@@ -93,7 +94,7 @@ func (rs *runState) apply(ev runner.Event, now time.Time) bool {
 	case runner.KindStepStarted:
 		s := rs.step(ev.Step)
 		s.status, s.start = stRunning, now
-		rs.log(now, logInfo, "▸ étape "+ev.Step)
+		rs.log(now, logInfo, i18n.T("run.step", ev.Step))
 		rs.lastOutput = now
 	case runner.KindStepDone:
 		s := rs.step(ev.Step)
@@ -224,7 +225,7 @@ func (m *Model) runContent() string {
 		}
 	}
 	if rs.active() && !rs.paused && rs.ask == "" && time.Since(rs.lastOutput) > 2*time.Second {
-		out = append(out, sFaint.Render(time.Now().Format("15:04:05"))+" "+sPink.Render(spin(m.frame)+" en attente de la réponse…"))
+		out = append(out, sFaint.Render(time.Now().Format("15:04:05"))+" "+sPink.Render(spin(m.frame)+" "+i18n.T("run.waiting")))
 	}
 	return strings.Join(out, "\n")
 }
@@ -326,42 +327,42 @@ func (m *Model) viewRun() string {
 	}
 	rs := m.runs[m.runCard]
 	if rs == nil {
-		return sDim.Render("aucun run")
+		return sDim.Render(i18n.T("run.none"))
 	}
 	secs := int(rs.elapsed(time.Now()).Seconds())
 	var status string
 	switch {
 	case rs.starting:
-		status = sPink.Render(spin(m.frame) + " démarrage")
+		status = sPink.Render(spin(m.frame) + " " + i18n.T("run.starting"))
 	case rs.paused:
-		status = sYellow.Render("⏸ en pause · " + clock(secs))
+		status = sYellow.Render(i18n.T("run.paused", clock(secs)))
 	case rs.status == board.StatusRunning:
-		status = sPink.Render(spin(m.frame) + " en cours · " + clock(secs))
+		status = sPink.Render(spin(m.frame) + " " + i18n.T("run.running", clock(secs)))
 	case rs.status == board.StatusCompleted:
-		status = sGreen.Render("✓ terminé · " + clock(secs))
+		status = sGreen.Render(i18n.T("run.done", clock(secs)))
 	case rs.status == board.StatusCancelled:
-		status = sDim.Render("⊘ annulé · " + clock(secs))
+		status = sDim.Render(i18n.T("run.cancelled", clock(secs)))
 	default:
-		status = sRed.Render("✗ échec · " + clock(secs))
+		status = sRed.Render(i18n.T("run.failed", clock(secs)))
 	}
 	head := header(sBadge.Render("TODO")+"  "+sText.Render(title)+"  "+sDim.Render("/ "+wf), status, m.w)
 
 	lw, rw := m.runWidths()
 	ph := m.h - 3
 	left := m.stepsPane(rs, lw, ph)
-	right := paneBox(rw, ph, sBold.Foreground(cLav).Render("Logs (stream)")+"\n"+m.vp.View())
+	right := paneBox(rw, ph, sBold.Foreground(cLav).Render(i18n.T("run.logs"))+"\n"+m.vp.View())
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
 	var foot string
 	if rs.ask != "" {
 		foot = sPink.Render(rs.ask) + " " + m.answer.View()
 	} else {
-		follow := hint("f", "suivre")
+		follow := hint("f", i18n.T("h.follow"))
 		if rs.follow {
 			follow += sPink.Render(" ●")
 		}
-		foot = hints(hint("esc", "retour board"), hint("p", map[bool]string{true: "reprendre", false: "pause"}[rs.paused]),
-			hint("c", "annuler"), hint("↑↓", "défiler logs"), follow, hint("r", "relancer"))
+		foot = hints(hint("esc", i18n.T("h.back")), hint("p", map[bool]string{true: i18n.T("h.resume"), false: i18n.T("h.pause")}[rs.paused]),
+			hint("c", i18n.T("h.cancel")), hint("↑↓", i18n.T("h.scroll")), follow, hint("r", i18n.T("h.retry")))
 	}
 	return head + "\n" + body + "\n" + footer(m.w, foot)
 }
@@ -373,7 +374,7 @@ func paneBox(w, h int, content string) string {
 
 func (m *Model) stepsPane(rs *runState, w, h int) string {
 	inner := w - 4
-	lines := []string{sBold.Foreground(cLav).Render("Étapes")}
+	lines := []string{sBold.Foreground(cLav).Render(i18n.T("run.steps"))}
 	now := time.Now()
 	for _, s := range rs.steps {
 		var icon, dur string
@@ -395,7 +396,7 @@ func (m *Model) stepsPane(rs *runState, w, h int) string {
 		lines = append(lines, row(icon+" "+st.Render(strings.TrimRight(name, " ")), sDim.Render(dur), inner))
 	}
 	if len(rs.steps) == 0 {
-		lines = append(lines, sDim.Render("étapes inconnues"))
+		lines = append(lines, sDim.Render(i18n.T("run.nosteps")))
 	}
 	// Inputs at the bottom.
 	var in []string
@@ -407,7 +408,7 @@ func (m *Model) stepsPane(rs *runState, w, h int) string {
 	for _, k := range keys {
 		in = append(in, k+"="+rs.inputs[k])
 	}
-	bottom := []string{lipgloss.NewStyle().Foreground(cBorder).Render(strings.Repeat("─", inner)), sDim.Render("Entrées")}
+	bottom := []string{lipgloss.NewStyle().Foreground(cBorder).Render(strings.Repeat("─", inner)), sDim.Render(i18n.T("run.inputs"))}
 	if len(in) == 0 {
 		bottom = append(bottom, sDim.Render("—"))
 	} else {
