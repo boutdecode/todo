@@ -13,6 +13,7 @@ import (
 	"todo/internal/board"
 	"todo/internal/config"
 	"todo/internal/i18n"
+	"todo/internal/runner"
 )
 
 func key(s string) tea.KeyMsg {
@@ -304,5 +305,58 @@ func TestFrenchInterface(t *testing.T) {
 		if !strings.Contains(v, want) {
 			t.Fatalf("missing %q:\n%s", want, v)
 		}
+	}
+}
+
+func TestFormOneFieldPerInput(t *testing.T) {
+	m := newModel(t, "true")
+	m.wfs = []runner.Workflow{{Name: "task", Inputs: []runner.Input{
+		{Name: "workdir"}, {Name: "prompt", Required: true},
+	}}}
+	m.Update(key("n"))
+	for _, r := range "T" {
+		m.Update(key(string(r)))
+	}
+	m.Update(key("tab")) // column
+	m.Update(key("tab")) // workflow
+	m.Update(key("down"))
+	f := m.form
+	if len(f.inputs) != 2 || f.inputs[0].Value() != m.dir {
+		t.Fatalf("inputs=%d workdir=%q", len(f.inputs), f.inputs[0].Value())
+	}
+	m.Update(key("ctrl+s"))
+	if m.mode != modeForm || !strings.Contains(m.View(), "prompt is required") {
+		t.Fatal("required input must block submit")
+	}
+	for _, r := range "hello" {
+		m.Update(key(string(r)))
+	}
+	m.Update(key("ctrl+s"))
+	cards := m.board.Columns[1].Cards
+	got := cards[len(cards)-1].Inputs
+	if got["prompt"] != "hello" || got["workdir"] != m.dir {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestPromptIsMultiline(t *testing.T) {
+	m := newModel(t, "true")
+	m.wfs = []runner.Workflow{{Name: "task", Inputs: []runner.Input{{Name: "prompt"}}}}
+	m.Update(key("n"))
+	m.Update(key("x"))
+	m.Update(key("tab"))
+	m.Update(key("tab"))
+	m.Update(key("down"))
+	m.Update(key("tab"))
+	m.Update(key("a"))
+	m.Update(key("enter"))
+	m.Update(key("b"))
+	if m.mode != modeForm {
+		t.Fatal("enter must add a newline, not submit")
+	}
+	m.Update(key("ctrl+s"))
+	cards := m.board.Columns[1].Cards
+	if got := cards[len(cards)-1].Inputs["prompt"]; got != "a\nb" {
+		t.Fatalf("%q", got)
 	}
 }

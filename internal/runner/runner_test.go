@@ -146,3 +146,13 @@ func TestPauseResume(t *testing.T) {
 		t.Fatalf("%+v", last)
 	}
 }
+
+func TestParseInputs(t *testing.T) {
+	in := parseInputs([]byte("inputs:\n  - name: a\n    required: true\n  - name: b\n    default: x\nstates:\n  initial: s\n"))
+	if len(in) != 2 || in[0].Name != "a" || !in[0].Required || in[1].Default != "x" {
+		t.Fatalf("%+v", in)
+	}
+	if parseInputs([]byte("states: {}")) != nil {
+		t.Fatal("no inputs")
+	}
+}

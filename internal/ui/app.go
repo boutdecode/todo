@@ -267,7 +267,7 @@ func (m *Model) workflow(name string) runner.Workflow {
 			return w
 		}
 	}
-	return runner.Workflow{Name: name, Steps: runner.Steps(m.dir, name)}
+	return runner.Load(m.dir, name)
 }
 
 func (m *Model) activeRuns() int {

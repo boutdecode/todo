@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,9 +18,7 @@ const (
 	fTitle = iota
 	fColumn
 	fWorkflow
-	fInputs
-	fAuto
-	fCount
+	fInput0 // inputs occupy fInput0 .. fInput0+len(inputs)-1, then the auto checkbox
 )
 
 const wfRows = 4
@@ -29,7 +27,10 @@ type form struct {
 	editID    string
 	card      board.Card
 	title     textinput.Model
-	inputs    textinput.Model
+	inputs    []*field // one per input declared by the selected workflow
+	inNames   []runner.Input
+	vals      map[string]string // typed values, kept across workflow changes
+	workdir   string
 	filter    textinput.Model
 	filtering bool
 	col       int
@@ -43,6 +44,78 @@ type form struct {
 	err       string
 }
 
+const promptRows = 5
+
+// field is a single-line input, or a multi-line one for "prompt" inputs.
+type field struct {
+	one   textinput.Model
+	multi bool
+	area  textarea.Model
+}
+
+func newField(name, v string) *field {
+	f := &field{one: newInput("")}
+	if name == "prompt" {
+		f.multi = true
+		f.area = textarea.New()
+		f.area.Prompt = ""
+		f.area.ShowLineNumbers = false
+		f.area.CharLimit = 0
+		f.area.SetHeight(promptRows)
+		f.area.SetValue(v)
+		return f
+	}
+	f.one.SetValue(v)
+	return f
+}
+
+func (f *field) Value() string {
+	if f.multi {
+		return f.area.Value()
+	}
+	return f.one.Value()
+}
+
+func (f *field) Focus() tea.Cmd {
+	if f.multi {
+		return f.area.Focus()
+	}
+	return f.one.Focus()
+}
+
+func (f *field) Blur() {
+	if f.multi {
+		f.area.Blur()
+	} else {
+		f.one.Blur()
+	}
+}
+
+func (f *field) SetWidth(w int) {
+	if f.multi {
+		f.area.SetWidth(w)
+		return
+	}
+	f.one.Width = w
+}
+
+func (f *field) View() string {
+	if f.multi {
+		return f.area.View()
+	}
+	return f.one.View()
+}
+
+func (f *field) Update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	if f.multi {
+		f.area, cmd = f.area.Update(msg)
+	} else {
+		f.one, cmd = f.one.Update(msg)
+	}
+	return cmd
+}
+
 func newInput(placeholder string) textinput.Model {
 	t := textinput.New()
 	t.Prompt = ""
@@ -52,7 +125,7 @@ func newInput(placeholder string) textinput.Model {
 }
 
 func newForm(m *Model, c *board.Card) *form {
-	f := &form{col: m.col, auto: true}
+	f := &form{col: m.col, auto: true, vals: map[string]string{}, workdir: m.dir}
 	for _, col := range m.board.Columns {
 		f.cols = append(f.cols, col.Name)
 	}
@@ -61,12 +134,13 @@ func newForm(m *Model, c *board.Card) *form {
 	}
 	f.wfs = append([]runner.Workflow{{}}, m.wfs...)
 	f.title = newInput(i18n.T("form.titleph"))
-	f.inputs = newInput(i18n.T("form.inputsph"))
 	f.filter = newInput(i18n.T("form.filterph"))
 	if c != nil {
 		f.editID, f.card, f.auto = c.ID, *c, c.AutoRun
 		f.title.SetValue(c.Title)
-		f.inputs.SetValue(formatInputs(c.Inputs))
+		for k, v := range c.Inputs {
+			f.vals[k] = v
+		}
 		f.col, _, _ = m.board.Find(c.ID)
 		if c.Workflow != "" && !hasWorkflow(f.wfs, c.Workflow) {
 			f.wfs = append(f.wfs, m.workflow(c.Workflow))
@@ -102,6 +176,35 @@ func (f *form) refilter(c *board.Card) {
 			}
 		}
 	}
+	f.syncInputs()
+}
+
+func (f *form) autoIdx() int { return fInput0 + len(f.inputs) }
+func (f *form) count() int   { return f.autoIdx() + 1 }
+
+// syncInputs rebuilds the input fields for the selected workflow, keeping typed values.
+func (f *form) syncInputs() {
+	for i, in := range f.inNames {
+		f.vals[in.Name] = f.inputs[i].Value()
+	}
+	f.inNames, f.inputs = nil, nil
+	if f.pos < len(f.shown) {
+		for _, in := range f.wfs[f.shown[f.pos]].Inputs {
+			v, ok := f.vals[in.Name]
+			switch {
+			case ok:
+			case in.Name == "workdir":
+				v = f.workdir
+			default:
+				v = in.Default
+			}
+			f.inNames = append(f.inNames, in)
+			f.inputs = append(f.inputs, newField(in.Name, v))
+		}
+	}
+	if f.focus > f.autoIdx() {
+		f.focus = f.autoIdx()
+	}
 }
 
 func (f *form) selected() string {
@@ -111,42 +214,17 @@ func (f *form) selected() string {
 	return ""
 }
 
-func formatInputs(in map[string]string) string {
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, len(keys))
-	for i, k := range keys {
-		parts[i] = k + "=" + in[k]
-	}
-	return strings.Join(parts, ", ")
-}
-
-func parseInputs(s string) map[string]string {
-	out := map[string]string{}
-	for _, p := range strings.Split(s, ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
-		if k = strings.TrimSpace(k); ok && k != "" {
-			out[k] = strings.TrimSpace(v)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func (f *form) focusCmd() tea.Cmd {
 	f.title.Blur()
-	f.inputs.Blur()
 	f.filter.Blur()
+	for i := range f.inputs {
+		f.inputs[i].Blur()
+	}
 	switch {
 	case f.focus == fTitle:
 		return f.title.Focus()
-	case f.focus == fInputs:
-		return f.inputs.Focus()
+	case f.focus >= fInput0 && f.focus < f.autoIdx():
+		return f.inputs[f.focus-fInput0].Focus()
 	case f.focus == fWorkflow && f.filtering:
 		return f.filter.Focus()
 	}
@@ -154,7 +232,8 @@ func (f *form) focusCmd() tea.Cmd {
 }
 
 func (f *form) move(d int) tea.Cmd {
-	f.focus = (f.focus + fCount + d) % fCount
+	n := f.count()
+	f.focus = (f.focus + n + d) % n
 	f.filtering = false
 	return f.focusCmd()
 }
@@ -170,7 +249,23 @@ func (m *Model) submitForm() tea.Cmd {
 	c := f.card
 	c.Title = title
 	c.Workflow = f.selected()
-	c.Inputs = parseInputs(f.inputs.Value())
+	if len(f.inputs) > 0 {
+		c.Inputs = map[string]string{}
+		for i, in := range f.inNames {
+			v := strings.TrimSpace(f.inputs[i].Value())
+			if v == "" && in.Required {
+				f.err = i18n.T("form.err.required", in.Name)
+				f.focus = fInput0 + i
+				return f.focusCmd()
+			}
+			if v != "" {
+				c.Inputs[in.Name] = v
+			}
+		}
+		if len(c.Inputs) == 0 {
+			c.Inputs = nil
+		}
+	}
 	c.AutoRun = f.auto
 	m.mode = modeBoard
 	if f.editID != "" {
@@ -210,10 +305,13 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		return m, f.move(-1)
 	case "enter", "ctrl+s":
+		if i := f.focus - fInput0; k == "enter" && i >= 0 && i < len(f.inputs) && f.inputs[i].multi {
+			break // newline in a multi-line input
+		}
 		return m, m.submitForm()
 	}
-	switch f.focus {
-	case fColumn:
+	switch {
+	case f.focus == fColumn:
 		switch k {
 		case "left":
 			f.col = (f.col + len(f.cols) - 1) % len(f.cols)
@@ -225,19 +323,21 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, f.move(1)
 		}
 		return m, nil
-	case fWorkflow:
+	case f.focus == fWorkflow:
 		switch k {
 		case "up":
 			if f.pos == 0 {
 				return m, f.move(-1)
 			}
 			f.pos--
+			f.syncInputs()
 			return m, nil
 		case "down":
 			if f.pos >= len(f.shown)-1 {
 				return m, f.move(1)
 			}
 			f.pos++
+			f.syncInputs()
 			return m, nil
 		case "/":
 			if !f.filtering {
@@ -252,7 +352,7 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
-	case fAuto:
+	case f.focus == f.autoIdx():
 		switch k {
 		case " ", "left", "right", "x":
 			f.auto = !f.auto
@@ -264,25 +364,44 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// text fields
+	multi := (*textarea.Model)(nil)
+	if i := f.focus - fInput0; i >= 0 && i < len(f.inputs) && f.inputs[i].multi {
+		multi = &f.inputs[i].area
+	}
 	switch k {
 	case "up":
-		return m, f.move(-1)
+		if multi == nil || multi.Line() == 0 {
+			return m, f.move(-1)
+		}
 	case "down":
-		return m, f.move(1)
+		if multi == nil || multi.Line() >= multi.LineCount()-1 {
+			return m, f.move(1)
+		}
 	}
 	var cmd tea.Cmd
 	if f.focus == fTitle {
 		f.title, cmd = f.title.Update(msg)
-	} else {
-		f.inputs, cmd = f.inputs.Update(msg)
+	} else if i := f.focus - fInput0; i >= 0 && i < len(f.inputs) {
+		cmd = f.inputs[i].Update(msg)
 	}
 	return m, cmd
 }
 
 // ---- view ----
 
-func (f *form) view(w int, transparent bool) []string {
-	mw := 76
+func (f *form) view(w, h int, transparent bool) []string {
+	rows := wfRows
+	for {
+		out := f.render(w, transparent, rows)
+		if len(out) <= h || rows <= 1 {
+			return out
+		}
+		rows--
+	}
+}
+
+func (f *form) render(w int, transparent bool, rows int) []string {
+	mw := 100
 	if mw > w-4 {
 		mw = w - 4
 	}
@@ -305,7 +424,9 @@ func (f *form) view(w int, transparent bool) []string {
 		title, create = i18n.T("form.edit"), i18n.T("form.save")
 	}
 	f.title.Width = inner - 4
-	f.inputs.Width = inner - 4
+	for i := range f.inputs {
+		f.inputs[i].SetWidth(inner - 4)
+	}
 	f.filter.Width = inner - 20
 
 	col := sText.Render(f.cols[f.col])
@@ -324,10 +445,10 @@ func (f *form) view(w int, transparent bool) []string {
 		label(fWorkflow, hdr),
 	}
 	start := 0
-	if f.pos >= wfRows {
-		start = f.pos - wfRows + 1
+	if f.pos >= rows {
+		start = f.pos - rows + 1
 	}
-	for r := 0; r < wfRows; r++ {
+	for r := 0; r < rows; r++ {
 		p := start + r
 		if p >= len(f.shown) {
 			lines = append(lines, "")
@@ -350,16 +471,32 @@ func (f *form) view(w int, transparent bool) []string {
 		box = sGreen.Render("[x]")
 	}
 	chk := box + " " + i18n.T("form.auto", f.runCol)
-	if f.focus == fAuto {
+	if f.focus == f.autoIdx() {
 		chk = sBold.Foreground(cPink).Render("▸ ") + chk
 	} else {
 		chk = "  " + chk
 	}
-	lines = append(lines, "", label(fInputs, i18n.T("form.field.inputs")), bar(fInputs)+" "+f.inputs.View(), "", chk, "")
+	lines = append(lines, "")
+	for i, in := range f.inNames {
+		name := in.Name
+		if in.Required {
+			name += " *"
+		}
+		lines = append(lines, label(fInput0+i, name))
+		for _, l := range strings.Split(f.inputs[i].View(), "\n") {
+			lines = append(lines, bar(fInput0+i)+" "+l)
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines, chk, "")
+	submitKey := "↵"
+	if i := f.focus - fInput0; i >= 0 && i < len(f.inputs) && f.inputs[i].multi {
+		submitKey = "ctrl+s"
+	}
 	if f.err != "" {
 		lines = append(lines, sRed.Render(f.err))
 	} else {
-		lines = append(lines, hints(hint("tab", i18n.T("h.nextfield")), hint("↵", create), hint("esc", i18n.T("h.cancel"))))
+		lines = append(lines, hints(hint("tab", i18n.T("h.nextfield")), hint(submitKey, create), hint("esc", i18n.T("h.cancel"))))
 	}
 	body := make([]string, len(lines))
 	for i, l := range lines {
@@ -384,7 +521,7 @@ func (m *Model) viewForm() string {
 	for len(bg) < m.h {
 		bg = append(bg, "")
 	}
-	fl := m.form.view(m.w, m.transparent)
+	fl := m.form.view(m.w, m.h, m.transparent)
 	x := (m.w - lipgloss.Width(fl[0])) / 2
 	y := (m.h - len(fl)) / 2
 	if y < 0 {

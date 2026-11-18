@@ -269,8 +269,16 @@ func Workflows(dir string) []string {
 
 // Workflow describes a workflow available to cards.
 type Workflow struct {
-	Name  string
-	Steps []string
+	Name   string
+	Steps  []string
+	Inputs []Input
+}
+
+// Input is an input declared in a workflow's `inputs:` section.
+type Input struct {
+	Name     string
+	Required bool
+	Default  string
 }
 
 // Summary is "a · b · c" for up to 3 steps, "N steps" beyond, "" when unknown.
@@ -358,12 +366,63 @@ func parseSteps(data []byte) []string {
 	return steps
 }
 
+// Load reads a workflow's steps and declared inputs.
+func Load(dir, name string) Workflow {
+	w := Workflow{Name: name}
+	p := WorkflowFile(dir, name)
+	if p == "" {
+		return w
+	}
+	if data, err := os.ReadFile(p); err == nil {
+		w.Steps = parseSteps(data)
+		w.Inputs = parseInputs(data)
+	}
+	return w
+}
+
+// parseInputs lists the entries of the top-level `inputs:` sequence.
+func parseInputs(data []byte) []Input {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []Input
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		seq := root.Content[i+1]
+		if root.Content[i].Value != "inputs" || seq.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, item := range seq.Content {
+			var in Input
+			for k := 0; k+1 < len(item.Content); k += 2 {
+				v := item.Content[k+1].Value
+				switch item.Content[k].Value {
+				case "name":
+					in.Name = v
+				case "required":
+					in.Required = v == "true"
+				case "default":
+					in.Default = v
+				}
+			}
+			if in.Name != "" {
+				out = append(out, in)
+			}
+		}
+	}
+	return out
+}
+
 // ListWorkflows returns the workflows of dir with their steps.
 func ListWorkflows(dir string) []Workflow {
 	names := Workflows(dir)
 	out := make([]Workflow, len(names))
 	for i, n := range names {
-		out[i] = Workflow{Name: n, Steps: Steps(dir, n)}
+		out[i] = Load(dir, n)
 	}
 	return out
 }
