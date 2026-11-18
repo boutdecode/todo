@@ -3,6 +3,17 @@
 Terminal kanban (Bubble Tea / Lip Gloss) whose cards can run [AWF](https://awf-project.ai) workflows.
 Same family as `awf-tui`.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/boutdecode/todo/main/install.sh | bash
+```
+
+Installs the latest release (Linux / macOS, amd64 / arm64) into `~/.local/bin` after verifying its checksum.
+`VERSION=v0.1.0` pins a release, `INSTALL_DIR=/usr/local/bin` changes the target.
+
+## Usage
+
 ```sh
 make build
 ./todo -dir /path/to/awf-project      # default: current directory
