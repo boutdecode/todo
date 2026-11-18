@@ -55,6 +55,7 @@ type Model struct {
 	filter        string
 	filterIn      textinput.Model
 	w, h          int
+	fullW, fullH  int
 	msg           string
 	runs          map[string]*runState
 	form          *form
@@ -339,7 +340,8 @@ func (m *Model) resize() {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.w, m.h = msg.Width, msg.Height
+		m.fullW, m.fullH = msg.Width, msg.Height
+		m.w, m.h = max(msg.Width-2*padX, 1), max(msg.Height-2*padY, 1)
 		m.resize()
 		m.refreshRun()
 		return m, nil
@@ -545,12 +547,22 @@ func (m *Model) reorder(d int) {
 
 // ---- view ----
 
+// Marges autour de l'écran (colonnes / lignes).
+const padX, padY = 2, 1
+
 func (m *Model) View() string {
 	v := m.render()
+	ind := strings.Repeat(" ", padX)
+	lines := strings.Split(v, "\n")
+	for i, l := range lines {
+		lines[i] = ind + l
+	}
+	pad := make([]string, padY)
+	v = strings.Join(append(append(pad, lines...), pad...), "\n")
 	if m.transparent {
 		return v
 	}
-	return paintPage(v, m.w, m.h)
+	return paintPage(v, m.fullW, m.fullH)
 }
 
 func (m *Model) render() string {
