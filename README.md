@@ -7,6 +7,7 @@ Même famille que `awf-tui`.
 make build
 ./todo -dir /chemin/du/projet-awf     # défaut : répertoire courant
 ./todo -awf /chemin/vers/awf          # binaire awf (défaut : config, puis "awf")
+./todo -transparent                   # garde le fond du terminal (ou `transparent: true` dans la config)
 ```
 
 ## Stockage

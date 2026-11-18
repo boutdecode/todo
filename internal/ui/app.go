@@ -64,6 +64,7 @@ type Model struct {
 	confirmCardID string
 	frame         int
 	ticking       bool
+	transparent   bool // keep the terminal background
 }
 
 // New builds the model for a project directory.
@@ -82,6 +83,9 @@ func New(dir, bin string, cfg *config.Config, b *board.Board) *Model {
 	m.resize()
 	return m
 }
+
+// SetTransparent keeps the terminal's own background instead of painting the mockup's.
+func (m *Model) SetTransparent(t bool) { m.transparent = t }
 
 // SetVersion records the awf version shown in the header.
 func (m *Model) SetVersion(v string) { m.version = v }
@@ -542,6 +546,14 @@ func (m *Model) reorder(d int) {
 // ---- view ----
 
 func (m *Model) View() string {
+	v := m.render()
+	if m.transparent {
+		return v
+	}
+	return paintPage(v, m.w, m.h)
+}
+
+func (m *Model) render() string {
 	switch m.mode {
 	case modeForm:
 		return m.viewForm()

@@ -18,6 +18,7 @@ import (
 func main() {
 	dir := flag.String("dir", ".", "projet AWF (le board est dans <dir>/.todo/board.yaml)")
 	awf := flag.String("awf", "", "binaire awf (défaut : config, puis \"awf\")")
+	transparent := flag.Bool("transparent", false, "garder le fond du terminal (pas de fond coloré)")
 	flag.Parse()
 
 	abs, err := filepath.Abs(*dir)
@@ -36,6 +37,7 @@ func main() {
 		fatal(fmt.Errorf("board %s : %w", board.Path(abs), err))
 	}
 	model := ui.New(abs, cfg.AWF, cfg, b)
+	model.SetTransparent(*transparent || cfg.Transparent)
 	model.SetVersion(runner.Version(cfg.AWF))
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 		fatal(err)

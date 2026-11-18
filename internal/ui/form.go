@@ -280,7 +280,7 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // ---- view ----
 
-func (f *form) view(w int) []string {
+func (f *form) view(w int, transparent bool) []string {
 	mw := 76
 	if mw > w-4 {
 		mw = w - 4
@@ -364,8 +364,13 @@ func (f *form) view(w int) []string {
 	for i, l := range lines {
 		body[i] = fit(l, inner)
 	}
-	boxed := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cViolet).Padding(0, 2).Width(mw - 2).
-		Render(strings.Join(body, "\n"))
+	st := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cViolet).Padding(0, 2).Width(mw - 2)
+	content := strings.Join(body, "\n")
+	if !transparent {
+		st = st.Background(cCard).BorderBackground(cCard)
+		content = keepBg(content, cCard)
+	}
+	boxed := st.Render(content)
 	return strings.Split(boxed, "\n")
 }
 
@@ -378,7 +383,7 @@ func (m *Model) viewForm() string {
 	for len(bg) < m.h {
 		bg = append(bg, "")
 	}
-	fl := m.form.view(m.w)
+	fl := m.form.view(m.w, m.transparent)
 	x := (m.w - lipgloss.Width(fl[0])) / 2
 	y := (m.h - len(fl)) / 2
 	if y < 0 {

@@ -114,12 +114,14 @@ func (m *Model) renderColumn(ci int, col board.Column, colW, areaH int) string {
 			bc = cFaintB
 		}
 		st := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(bc).Padding(0, 1).Width(inner - 2)
-		if sel {
-			st = st.Background(cSelBg)
-		}
 		content := strings.Join(m.cardLines(c, sel, dimmed, tw), "\n")
-		if sel { // paint the background under styled segments
-			content = strings.ReplaceAll(content, "\x1b[0m", "\x1b[0m\x1b[48;2;38;32;64m")
+		switch {
+		case sel:
+			st = st.Background(cSelBg).BorderBackground(cSelBg)
+			content = keepBg(content, cSelBg)
+		case !m.transparent:
+			st = st.Background(cCard)
+			content = keepBg(content, cCard)
 		}
 		boxes[i] = st.Render(content)
 	}
@@ -157,17 +159,30 @@ func (m *Model) searchBar() string {
 	for ci := range m.board.Columns {
 		total += len(m.vis(ci))
 	}
-	word := "résultats"
-	if total <= 1 {
-		word = "résultat"
-	}
+	active := m.mode == modeFilter || m.filter != ""
 	in := m.filter
-	if m.mode == modeFilter {
+	var right string
+	switch {
+	case m.mode == modeFilter:
 		in = m.filterIn.View()
+	case m.filter == "":
+		in = sDim.Render("rechercher…")
+	}
+	if active {
+		word := "résultats"
+		if total <= 1 {
+			word = "résultat"
+		}
+		right = sDim.Render(itoa(total) + " " + word + " · titre, workflow · esc effacer")
+	} else {
+		right = sDim.Render(itoa(total) + " cartes · titre, workflow · / pour chercher")
+	}
+	border := cBorder
+	if active {
+		border = cLilac
 	}
 	left := sLilac().Render("/") + " " + in
-	right := sDim.Render(itoa(total) + " " + word + " · titre, workflow · esc effacer")
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cLilac).Padding(0, 1).
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Padding(0, 1).
 		Width(m.w - 2).Render(row(left, right, m.w-4))
 }
 
@@ -181,14 +196,10 @@ func (m *Model) viewBoard() string {
 	}
 	head := header(sBadge.Render("TODO")+"  "+sDim.Render("projet: "+projectName(m.dir)), right, m.w)
 
-	searching := m.mode == modeFilter || m.filter != ""
 	areaH := m.h - 1 - 2
-	parts := []string{head}
-	if searching {
-		bar := m.searchBar()
-		parts = append(parts, bar)
-		areaH -= lipgloss.Height(bar)
-	}
+	bar := m.searchBar()
+	parts := []string{head, bar}
+	areaH -= lipgloss.Height(bar)
 	if areaH < 5 {
 		areaH = 5
 	}

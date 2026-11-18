@@ -14,6 +14,8 @@ import (
 type Config struct {
 	// AWF is the awf binary (default "awf").
 	AWF string `yaml:"awf,omitempty"`
+	// Transparent keeps the terminal background instead of painting one.
+	Transparent bool `yaml:"transparent,omitempty"`
 	// Columns is the layout given to new boards.
 	Columns []board.Column `yaml:"columns,omitempty"`
 }

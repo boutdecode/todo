@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"todo/internal/board"
 	"todo/internal/config"
@@ -180,4 +181,37 @@ func TestRunViewAndLogs(t *testing.T) {
 		t.Fatalf("run view:\n%s", v)
 	}
 	m.Update(key("c"))
+}
+
+func TestPageBackground(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	m := newModel(t, "true")
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	bg := bgSeq(cPage)
+	if bg == "" {
+		t.Fatal("no bg sequence under truecolor")
+	}
+	check := func(name string) {
+		lines := strings.Split(m.View(), "\n")
+		if len(lines) != 30 {
+			t.Fatalf("%s: %d lines", name, len(lines))
+		}
+		for i, l := range lines {
+			if !strings.HasPrefix(l, bg) || lipgloss.Width(l) != 100 {
+				t.Fatalf("%s line %d not fully painted (w=%d)", name, i, lipgloss.Width(l))
+			}
+			body := strings.TrimSuffix(l, "\x1b[0m")
+			if strings.Count(body, "\x1b[0m") != strings.Count(body, "\x1b[0m"+bg+fgSeq(cText)) {
+				t.Fatalf("%s line %d: reset without background", name, i)
+			}
+		}
+	}
+	check("board")
+	m.Update(key("n"))
+	check("form")
+	m.SetTransparent(true)
+	if strings.Contains(m.View(), bg) {
+		t.Fatal("transparent must not paint the page")
+	}
 }

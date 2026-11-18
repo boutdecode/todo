@@ -25,6 +25,8 @@ var (
 	cFaint  = lipgloss.Color("#5b5b73") // stands for the mockup's opacity .4
 	cFaintB = lipgloss.Color("#2d2d40")
 	cSelBg  = lipgloss.Color("#262040")
+	cPage   = lipgloss.Color("#16161e") // page background
+	cCard   = lipgloss.Color("#1c1c28") // card / modal background
 
 	sText   = lipgloss.NewStyle().Foreground(cText)
 	sDim    = lipgloss.NewStyle().Foreground(cDim)
@@ -132,4 +134,48 @@ func overlay(bg, fg []string, x, y int) []string {
 		out[r] = left + "\x1b[0m" + l + "\x1b[0m" + right
 	}
 	return out
+}
+
+// bgSeq / fgSeq return the SGR sequence lipgloss would emit for a color on the
+// current terminal profile ("" when colors are off).
+func bgSeq(c lipgloss.Color) string { return sgr(lipgloss.NewStyle().Background(c)) }
+func fgSeq(c lipgloss.Color) string { return sgr(lipgloss.NewStyle().Foreground(c)) }
+
+func sgr(st lipgloss.Style) string {
+	out := st.Render("x")
+	if i := strings.Index(out, "x"); i > 0 {
+		return out[:i]
+	}
+	return ""
+}
+
+// keepBg re-applies a background after every reset inside s, so that
+// segments styled separately do not punch holes in it.
+func keepBg(s string, bg lipgloss.Color) string {
+	seq := bgSeq(bg)
+	if seq == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+seq)
+}
+
+// paintPage fills the whole w×h screen with the page background and default
+// text color.
+func paintPage(view string, w, h int) string {
+	bg, fg := bgSeq(cPage), fgSeq(cText)
+	if bg == "" {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	pre := bg + fg
+	for i, l := range lines {
+		if d := w - lipgloss.Width(l); d > 0 {
+			l += strings.Repeat(" ", d)
+		}
+		lines[i] = pre + strings.ReplaceAll(l, "\x1b[0m", "\x1b[0m"+pre) + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
 }
