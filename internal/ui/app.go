@@ -15,6 +15,7 @@ import (
 	"todo/internal/config"
 	"todo/internal/i18n"
 	"todo/internal/notify"
+	"todo/internal/review"
 	"todo/internal/runner"
 )
 
@@ -28,12 +29,14 @@ const (
 	modeFilter
 	modeHelp
 	modeName // typing a todo name (create / rename)
+	modeReview
 )
 
 type (
 	runStartedMsg struct {
 		card string
 		run  *runner.Run
+		base string // review.Snapshot taken just before the start
 		err  error
 	}
 	runEventMsg struct {
@@ -80,6 +83,9 @@ type Model struct {
 	frame         int
 	ticking       bool
 	transparent   bool // keep the terminal background
+
+	rv  reviewState
+	rvp viewport.Model
 
 	nt        Notifier // nil: no notifications
 	focusSeen bool     // the terminal reports focus changes
@@ -373,8 +379,11 @@ func shortDir(d string) string {
 
 func startCmd(bin, dir string, c board.Card) tea.Cmd {
 	return func() tea.Msg {
+		// The snapshot must be taken before the workflow can touch the tree. A failure
+		// only disables the review base (the view falls back to HEAD).
+		base, _ := review.Snapshot(dir)
 		r, err := runner.Start(bin, dir, c.Workflow, c.Inputs)
-		return runStartedMsg{card: c.ID, run: r, err: err}
+		return runStartedMsg{card: c.ID, run: r, base: base, err: err}
 	}
 }
 
@@ -466,6 +475,21 @@ func (m *Model) onEvent(msg runEventMsg) tea.Cmd {
 	return waitEvent(msg.card, msg.ch)
 }
 
+// setBaseRev stores the review base on the card (it may live in a non-active todo).
+func (m *Model) setBaseRev(id, base string) {
+	for _, b := range m.boards {
+		if ci, idx, ok := b.Find(id); ok {
+			if lr := b.Columns[ci].Cards[idx].LastRun; lr != nil {
+				lr.BaseRev = base
+				if err := b.Save(); err != nil {
+					m.msg = i18n.T("err.save", err.Error())
+				}
+			}
+			return
+		}
+	}
+}
+
 // finish records the result on the card and applies the column's OnSuccess/OnFailure.
 func (m *Model) finish(id string, ev runner.Event) {
 	if _, _, ok := m.board.Find(id); !ok {
@@ -492,7 +516,11 @@ func (m *Model) finish(id string, ev runner.Event) {
 		}
 		secs = int(rs.elapsed(time.Now()).Seconds())
 	}
-	c.LastRun = &board.LastRun{ID: runID, Status: ev.Status, At: time.Now(), Secs: secs}
+	base := ""
+	if c.LastRun != nil {
+		base = c.LastRun.BaseRev
+	}
+	c.LastRun = &board.LastRun{ID: runID, Status: ev.Status, At: time.Now(), Secs: secs, BaseRev: base}
 	target := ""
 	switch ev.Status {
 	case board.StatusCompleted:
@@ -521,6 +549,8 @@ func (m *Model) resize() {
 	lw, rw := m.runWidths()
 	_ = lw
 	m.vp.Width = rw - 4
+	m.rvp.Width = rw - 4
+	m.rvp.Height = max(m.h-3-3, 1)
 	m.syncRunLayout()
 }
 
@@ -546,6 +576,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		rs.starting = false
+		m.setBaseRev(msg.card, msg.base)
 		if msg.err != nil {
 			ev := runner.Event{Kind: runner.KindDone, Status: "failed", Error: msg.err.Error()}
 			rs.apply(ev, time.Now())
@@ -562,6 +593,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onEvent(msg)
 	case pasteMsg:
 		return m, m.onPaste(msg)
+	case reviewMsg:
+		m.onReview(msg)
+		return m, nil
 	case tea.FocusMsg:
 		m.focusSeen, m.focused = true, true
 		return m, nil
@@ -577,6 +611,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		case modeRun:
 			return m.updateRun(msg)
+		case modeReview:
+			return m.updateReview(msg)
 		case modeName:
 			switch msg.String() {
 			case "enter":
@@ -734,6 +770,10 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.openRun(c.ID)
 		}
+	case "v":
+		if c := m.curCard(); c != nil {
+			return m, m.openReview(c.ID)
+		}
 	case "c":
 		if c := m.curCard(); c != nil {
 			if rs := m.runs[c.ID]; rs != nil && rs.run != nil && rs.active() {
@@ -810,6 +850,8 @@ func (m *Model) render() string {
 		return m.viewForm()
 	case modeRun:
 		return m.viewRun()
+	case modeReview:
+		return m.viewReview()
 	case modeHelp:
 		return m.viewHelp()
 	}
@@ -823,7 +865,7 @@ func (m *Model) viewHelp() string {
 		{"H L", i18n.T("help.move")},
 		{"K J", i18n.T("help.reorder")},
 		{"n e d", i18n.T("help.card")},
-		{"l", i18n.T("help.logs")}, {"r", i18n.T("help.retry")}, {"c", i18n.T("help.cancel")},
+		{"l", i18n.T("help.logs")}, {"v", i18n.T("help.review")}, {"r", i18n.T("help.retry")}, {"c", i18n.T("help.cancel")},
 		{"tab", i18n.T("help.tab")},
 		{"N R D", i18n.T("help.todo")},
 		{"/  esc", i18n.T("help.search")}, {"q", i18n.T("help.quit")},

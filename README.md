@@ -77,6 +77,7 @@ to when the run ends (a failure shows as `✗` on the card). Existing boards kee
 | `K` `J` | reorder inside the column |
 | `n` `e` `d` | new / edit / delete (confirm with `y`) |
 | `l` | run logs (steps, timestamped output) |
+| `v` | code review: what the last run changed in the git tree (also available from the logs view) |
 | `r` | retry · `c` cancel |
 | `tab` `shift+tab` | next / previous todo (tabs at the top) |
 | `N` `R` `D` | new / rename / delete the todo (confirm with `y`, never the last one) |
@@ -85,6 +86,12 @@ to when the run ends (a failure shows as `✗` on the card). Existing boards kee
 
 Logs view: `p` pause/resume (SIGSTOP/SIGCONT), `c` cancel, `↑↓` scroll, `f` follow the tail, `r` retry, `esc` back
 (the run keeps going). Steps and the `step k/n · %` progress come from the `states:` of the workflow YAML.
+
+Review view: `tab`/`n` and `shift+tab`/`p` switch file, `↑↓` scroll, `r` recompute, `esc` back. Each launch records
+a snapshot of the tree (`git stash create` when tracked files are dirty, `HEAD` otherwise: a dangling commit, the
+working tree is untouched) in `last_run.base_rev` of the card; the view diffs it against the working tree, untracked
+files included (`.todo/` excluded). If that commit is gone, it compares with `HEAD` and says so. Files that were
+already untracked before the run show up as new.
 
 Form: title, column, workflow (list filterable with `/`, step summary), optional `key=value, …` inputs,
 auto-run checkbox. Badges: spinner running · ✓ · ✗ · ⊘ cancelled.

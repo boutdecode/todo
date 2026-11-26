@@ -31,6 +31,8 @@ type LastRun struct {
 	Status string    `yaml:"status"`
 	At     time.Time `yaml:"at"`
 	Secs   int       `yaml:"secs,omitempty"` // duration of the run
+	// BaseRev is the git revision of the tree when the run started (see review.Snapshot).
+	BaseRev string `yaml:"base_rev,omitempty"`
 }
 
 type Card struct {

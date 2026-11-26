@@ -245,7 +245,7 @@ func (m *Model) viewBoard() string {
 		foot = sYellow.Render(m.msg)
 	default:
 		foot = hints(hint("←↑↓→", i18n.T("h.navigate")), hint("↵", i18n.T("h.run")), hint("tab", i18n.T("h.nexttodo")), hint("/", i18n.T("h.search")), hint("n", i18n.T("h.newtask")),
-			hint("H L", i18n.T("h.move")), hint("l", i18n.T("h.logs")), hint("?", i18n.T("h.help")), hint("q", i18n.T("h.quit")))
+			hint("H L", i18n.T("h.move")), hint("l", i18n.T("h.logs")), hint("v", i18n.T("h.review")), hint("?", i18n.T("h.help")), hint("q", i18n.T("h.quit")))
 	}
 	parts = append(parts, footer(m.w, ansi.Truncate(foot, m.w, "")))
 	return strings.Join(parts, "\n")
