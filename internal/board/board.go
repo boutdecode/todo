@@ -192,6 +192,25 @@ func (b *Board) Save() error {
 	return os.Rename(tmp, b.File)
 }
 
+// AttachmentsDir returns the folder holding the pasted images of a project directory.
+func AttachmentsDir(dir string) string { return filepath.Join(Dir(dir), "attachments") }
+
+// SaveAttachment stores a pasted PNG under <dir>/.todo/attachments and returns its absolute path.
+func SaveAttachment(dir string, png []byte) (string, error) {
+	d := AttachmentsDir(dir)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(d, time.Now().Format("20060102-150405")+"-"+NewID()+".png")
+	if err := os.WriteFile(path, png, 0o644); err != nil {
+		return "", err
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return path, nil
+}
+
 // Delete removes the board file.
 func (b *Board) Delete() error {
 	if err := os.Remove(b.File); err != nil && !errors.Is(err, os.ErrNotExist) {

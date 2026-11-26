@@ -560,6 +560,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(msg.card, msg.run.Events)
 	case runEventMsg:
 		return m, m.onEvent(msg)
+	case pasteMsg:
+		return m, m.onPaste(msg)
 	case tea.FocusMsg:
 		m.focusSeen, m.focused = true, true
 		return m, nil
