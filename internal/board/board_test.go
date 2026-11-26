@@ -1,6 +1,7 @@
 package board
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -66,5 +67,19 @@ func TestMultipleBoards(t *testing.T) {
 	}
 	if all, _ = LoadAll(dir, nil); len(all) != 1 {
 		t.Fatal("delete")
+	}
+}
+
+func TestSaveAttachment(t *testing.T) {
+	dir := t.TempDir()
+	path, err := SaveAttachment(dir, []byte("\x89PNG\r\n\x1a\nx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(path) || filepath.Dir(path) != AttachmentsDir(dir) || filepath.Ext(path) != ".png" {
+		t.Fatalf("unexpected path %q", path)
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) != 9 {
+		t.Fatalf("file not written: %v", err)
 	}
 }

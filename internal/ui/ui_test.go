@@ -14,6 +14,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"todo/internal/board"
+	"todo/internal/clip"
 	"todo/internal/config"
 	"todo/internal/i18n"
 	"todo/internal/runner"
@@ -488,5 +489,46 @@ func TestRunAskFocusHistoryVsInput(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != modeBoard {
 		t.Fatal("esc leaves the run view even while asking")
+	}
+}
+
+func TestPasteImageInFormPrompt(t *testing.T) {
+	m := newModel(t, "")
+	m.form = newForm(m, nil)
+	m.form.inNames = []runner.Input{{Name: "prompt"}}
+	m.form.inputs = []*field{newField("prompt", "see ")}
+	m.form.focus = fInput0
+	m.mode = modeForm
+	m.form.inputs[0].Focus()
+
+	imageReader = func() ([]byte, error) { return []byte("\x89PNG\r\n\x1a\nx"), nil }
+	defer func() { imageReader = clip.Image }()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	drain(m, cmd)
+	v := m.form.inputs[0].Value()
+	if !strings.HasPrefix(v, "see ") || !strings.Contains(v, filepath.Join(".todo", "attachments")) || !strings.HasSuffix(v, ".png") {
+		t.Fatalf("prompt = %q", v)
+	}
+	files, _ := filepath.Glob(filepath.Join(board.AttachmentsDir(m.dir), "*.png"))
+	if len(files) != 1 {
+		t.Fatalf("attachments = %v", files)
+	}
+}
+
+func TestPasteWithoutImageSavesNothing(t *testing.T) {
+	m := newModel(t, "")
+	m.form = newForm(m, nil)
+	m.form.inNames = []runner.Input{{Name: "prompt"}}
+	m.form.inputs = []*field{newField("prompt", "")}
+	m.form.focus = fInput0
+	m.mode = modeForm
+	imageReader = func() ([]byte, error) { return nil, clip.ErrNoImage }
+	defer func() { imageReader = clip.Image }()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	drain(m, cmd)
+	if _, err := os.Stat(board.AttachmentsDir(m.dir)); err == nil {
+		t.Fatal("no attachment expected")
 	}
 }

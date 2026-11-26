@@ -96,6 +96,15 @@ already untracked before the run show up as new.
 Form: title, column, workflow (list filterable with `/`, step summary), optional `key=value, …` inputs,
 auto-run checkbox. Badges: spinner running · ✓ · ✗ · ⊘ cancelled.
 
+## Pasting images
+
+`ctrl+v` in a `prompt` input of the form, or in the answer box of a conversation step, pastes the clipboard image:
+it is saved as a PNG in `<dir>/.todo/attachments/` and its absolute path is inserted in the text, so the workflow
+(or the agent) can read the file. If the clipboard holds no image, `ctrl+v` pastes text as usual.
+
+The image is read with `wl-paste` (Wayland, package `wl-clipboard`), `xclip` (X11) or `pngpaste` (macOS); one of
+them must be installed. Only PNG is supported.
+
 ## Limits
 
 - A run's output is only kept in memory (status, id and duration of the last run are saved in the board).

@@ -285,6 +285,8 @@ func (m *Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				rs.ask, rs.focusInput = "", false
 				m.refreshRun()
 				return m, nil
+			case "ctrl+v":
+				return m, pasteImageCmd(m.dir, pasteAnswer, 0)
 			case "enter":
 				txt := m.answer.Value()
 				rs.log(time.Now(), logInfo, "› "+txt)

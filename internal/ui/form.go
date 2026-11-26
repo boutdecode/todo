@@ -304,6 +304,10 @@ func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, f.move(1)
 	case "shift+tab":
 		return m, f.move(-1)
+	case "ctrl+v":
+		if i := f.focus - fInput0; i >= 0 && i < len(f.inputs) && f.inputs[i].multi {
+			return m, pasteImageCmd(m.dir, pasteForm, i)
+		}
 	case "enter", "ctrl+s":
 		if i := f.focus - fInput0; k == "enter" && i >= 0 && i < len(f.inputs) && f.inputs[i].multi {
 			break // newline in a multi-line input

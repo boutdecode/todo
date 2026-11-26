@@ -591,6 +591,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(msg.card, msg.run.Events)
 	case runEventMsg:
 		return m, m.onEvent(msg)
+	case pasteMsg:
+		return m, m.onPaste(msg)
 	case reviewMsg:
 		m.onReview(msg)
 		return m, nil
