@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -360,6 +361,69 @@ func TestPromptIsMultiline(t *testing.T) {
 	cards := m.board.Columns[1].Cards
 	if got := cards[len(cards)-1].Inputs["prompt"]; got != "a\nb" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestReviewViewFromBoardAndLogs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	m := newModel(t, `echo "Workflow started: r1"; echo ok`)
+	g := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = m.dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	g("init", "-q")
+	if err := os.WriteFile(filepath.Join(m.dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g("add", "a.txt")
+	g("commit", "-qm", "init")
+
+	_, cmd := m.Update(key("enter"))
+	drain(m, cmd)
+	// the run "edits" the tree after its snapshot
+	if err := os.WriteFile(filepath.Join(m.dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := m.card(m.board.Columns[doneIdx].Cards[0].ID)
+	if c.LastRun == nil || c.LastRun.BaseRev == "" {
+		t.Fatalf("base rev not recorded: %+v", c.LastRun)
+	}
+	m.col = doneIdx
+	m.clamp()
+
+	_, cmd = m.Update(key("v"))
+	if m.mode != modeReview {
+		t.Fatal("v on the board must open the review")
+	}
+	drain(m, cmd)
+	files := m.reviewFiles()
+	// (the fake awf script is an untracked file of the test repository too)
+	if len(files) == 0 || files[0].Path != "a.txt" || files[0].Adds != 1 {
+		t.Fatalf("review files: %+v", files)
+	}
+	if v := m.View(); !strings.Contains(v, "a.txt") || !strings.Contains(v, "two") {
+		t.Fatalf("review view:\n%s", v)
+	}
+	m.Update(key("esc"))
+	if m.mode != modeBoard {
+		t.Fatal("esc goes back to the board")
+	}
+
+	m.Update(key("l"))
+	_, cmd = m.Update(key("v"))
+	if m.mode != modeReview || m.rv.from != modeRun {
+		t.Fatal("v from the logs must open the review")
+	}
+	drain(m, cmd)
+	m.Update(key("esc"))
+	if m.mode != modeRun {
+		t.Fatal("esc goes back to the logs")
 	}
 }
 

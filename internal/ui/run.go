@@ -344,6 +344,8 @@ func (m *Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshRun()
 			return m, cmd
 		}
+	case "v":
+		return m, m.openReview(m.runCard)
 	case "f":
 		if rs != nil {
 			rs.follow = !rs.follow
