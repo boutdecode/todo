@@ -54,6 +54,7 @@ type runState struct {
 	logs       []logLine
 	ask, err   string
 	follow     bool
+	focusInput bool // ask pending: keyboard focus on the input box (else on the history)
 	inputs     map[string]string
 }
 
@@ -119,9 +120,9 @@ func (rs *runState) apply(ev runner.Event, now time.Time) bool {
 		rs.log(now, kind, ev.Line)
 		rs.lastOutput = now
 	case runner.KindAsk:
-		rs.ask = ev.Prompt
+		rs.ask, rs.focusInput = ev.Prompt, true
 	case runner.KindDone:
-		rs.status, rs.ask, rs.err, rs.paused = ev.Status, "", ev.Error, false
+		rs.status, rs.ask, rs.err, rs.paused, rs.focusInput = ev.Status, "", ev.Error, false, false
 		rs.endedAt = now
 		for i := range rs.steps {
 			if rs.steps[i].status == stRunning {
@@ -230,11 +231,37 @@ func (m *Model) runContent() string {
 	return strings.Join(out, "\n")
 }
 
+// asking reports whether the current run waits for a user message.
+func (rs *runState) asking() bool { return rs != nil && rs.ask != "" && rs.run != nil }
+
+// inputBoxH is the height of the framed input box shown under the history.
+const inputBoxH = 3
+
+// syncRunLayout sizes the history viewport (leaving room for the input box
+// while a question is pending) and syncs the input's keyboard focus.
+func (m *Model) syncRunLayout() {
+	rs := m.runs[m.runCard]
+	h := m.h - 6
+	asking := rs.asking()
+	if asking {
+		h -= inputBoxH
+	}
+	m.vp.Height = max(h, 1)
+	if asking && rs.focusInput {
+		if !m.answer.Focused() {
+			m.answer.Focus()
+		}
+	} else if m.answer.Focused() {
+		m.answer.Blur()
+	}
+}
+
 func (m *Model) refreshRun() {
 	if m.mode != modeRun {
 		return
 	}
 	rs := m.runs[m.runCard]
+	m.syncRunLayout()
 	m.vp.SetContent(m.runContent())
 	if rs != nil && rs.follow {
 		m.vp.GotoBottom()
@@ -243,26 +270,47 @@ func (m *Model) refreshRun() {
 
 func (m *Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rs := m.runs[m.runCard]
-	if rs != nil && rs.ask != "" && rs.run != nil {
+	if rs.asking() {
+		if rs.focusInput {
+			switch msg.String() {
+			case "esc":
+				m.mode = modeBoard
+				return m, nil
+			case "up":
+				rs.focusInput = false
+				m.refreshRun()
+				return m, nil
+			case "ctrl+d":
+				_ = rs.run.Answer(runner.EOF)
+				rs.ask, rs.focusInput = "", false
+				m.refreshRun()
+				return m, nil
+			case "enter":
+				txt := m.answer.Value()
+				rs.log(time.Now(), logInfo, "› "+txt)
+				_ = rs.run.Answer(txt)
+				rs.ask, rs.focusInput = "", false
+				m.answer.SetValue("")
+				m.refreshRun()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.answer, cmd = m.answer.Update(msg)
+				return m, cmd
+			}
+		}
+		// history focused: ↓ at the bottom (or enter / i) goes back to the input
 		switch msg.String() {
-		case "esc":
-		case "ctrl+d":
-			_ = rs.run.Answer(runner.EOF)
-			rs.ask = ""
-			return m, nil
-		case "enter":
-			txt := m.answer.Value()
-			rs.log(time.Now(), logInfo, "› "+txt)
-			_ = rs.run.Answer(txt)
-			rs.ask = ""
-			m.answer.SetValue("")
+		case "enter", "i":
+			rs.focusInput = true
 			m.refreshRun()
 			return m, nil
-		default:
-			m.answer.Focus()
-			var cmd tea.Cmd
-			m.answer, cmd = m.answer.Update(msg)
-			return m, cmd
+		case "down":
+			if m.vp.AtBottom() {
+				rs.focusInput, rs.follow = true, true
+				m.refreshRun()
+				return m, nil
+			}
 		}
 	}
 	switch msg.String() {
@@ -352,12 +400,20 @@ func (m *Model) viewRun() string {
 	lw, rw := m.runWidths()
 	ph := m.h - 3
 	left := m.stepsPane(rs, lw, ph)
-	right := paneBox(rw, ph, sBold.Foreground(cLav).Render(i18n.T("run.logs"))+"\n"+m.vp.View())
+	logs := sBold.Foreground(cLav).Render(i18n.T("run.logs")) + "\n" + m.vp.View()
+	if rs.asking() {
+		logs += "\n" + m.inputBox(rs, rw-4)
+	}
+	right := paneBox(rw, ph, logs)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
 	var foot string
-	if rs.ask != "" {
-		foot = sPink.Render(rs.ask) + " " + m.answer.View()
+	if rs.asking() {
+		if rs.focusInput {
+			foot = hints(hint("↵", i18n.T("h.send")), hint("ctrl+d", i18n.T("h.finish")), hint("↑", i18n.T("h.history")), hint("esc", i18n.T("h.back")))
+		} else {
+			foot = hints(hint("↓", i18n.T("h.input")), hint("↑↓ pgup/pgdn", i18n.T("h.scroll")), hint("p", i18n.T("h.pause")), hint("c", i18n.T("h.cancel")), hint("esc", i18n.T("h.back")))
+		}
 	} else {
 		follow := hint("f", i18n.T("h.follow"))
 		if rs.follow {
@@ -372,6 +428,18 @@ func (m *Model) viewRun() string {
 func paneBox(w, h int, content string) string {
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBorder).
 		Padding(0, 1).Width(w - 2).Height(h - 2).Render(content)
+}
+
+// inputBox renders the framed message input; its border is highlighted when focused.
+func (m *Model) inputBox(rs *runState, w int) string {
+	bc := cBorder
+	if rs.focusInput {
+		bc = cPink
+	}
+	m.answer.Placeholder = rs.ask
+	m.answer.Width = max(w-8-lipgloss.Width(m.answer.Prompt), 1)
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(bc).
+		Padding(0, 1).Width(w - 2).Height(inputBoxH - 2).Render(m.answer.View())
 }
 
 func (m *Model) stepsPane(rs *runState, w, h int) string {

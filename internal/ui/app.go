@@ -551,10 +551,7 @@ func (m *Model) resize() {
 	m.vp.Width = rw - 4
 	m.rvp.Width = rw - 4
 	m.rvp.Height = max(m.h-3-3, 1)
-	m.vp.Height = m.h - 3 - 3
-	if m.vp.Height < 1 {
-		m.vp.Height = 1
-	}
+	m.syncRunLayout()
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

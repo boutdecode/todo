@@ -82,7 +82,11 @@ var en = map[string]string{
 	"review.files.one":   "%d file",
 	"review.files.other": "%d files",
 	"h.retry":            "retry",
-	"conv.prompt":        "Conversation — your message (ctrl+d to finish)",
+	"h.send":             "send",
+	"h.finish":           "finish",
+	"h.history":          "history",
+	"h.input":            "input",
+	"conv.prompt":        "Your message",
 
 	// form
 	"form.new":           "New task",
@@ -227,7 +231,11 @@ var fr = map[string]string{
 	"review.files.one":   "%d fichier",
 	"review.files.other": "%d fichiers",
 	"h.retry":            "relancer",
-	"conv.prompt":        "Conversation — votre message (ctrl+d pour terminer)",
+	"h.send":             "envoyer",
+	"h.finish":           "terminer",
+	"h.history":          "historique",
+	"h.input":            "saisie",
+	"conv.prompt":        "Votre message",
 
 	"form.new":           "Nouvelle tâche",
 	"form.edit":          "Éditer la tâche",

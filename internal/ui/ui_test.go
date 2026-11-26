@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -422,5 +424,69 @@ func TestReviewViewFromBoardAndLogs(t *testing.T) {
 	m.Update(key("esc"))
 	if m.mode != modeRun {
 		t.Fatal("esc goes back to the logs")
+	}
+}
+
+func TestRunAskFocusHistoryVsInput(t *testing.T) {
+	m := newModel(t, `echo "Workflow started: r9"; for i in $(seq 1 60); do echo "line $i"; done; sleep 3`)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	_, cmd := m.Update(key("enter"))
+	msg := cmd()
+	if b, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range b {
+			if sm, ok := c().(runStartedMsg); ok {
+				msg = sm
+			}
+		}
+	}
+	m.Update(msg)
+	m.Update(key("l"))
+	id := m.runCard
+	rs := m.runs[id]
+	if rs == nil || rs.run == nil {
+		t.Fatal("run not started")
+	}
+	defer rs.run.Cancel()
+	for i := 1; i <= 60; i++ {
+		rs.log(time.Now(), logOut, fmt.Sprintf("line %d", i))
+	}
+	m.onEvent(runEventMsg{card: id, ev: runner.Event{Kind: runner.KindAsk, Step: "s", Prompt: "Your message"}})
+	if !rs.asking() || !rs.focusInput {
+		t.Fatal("a pending question focuses the input")
+	}
+	if v := m.View(); lipgloss.Height(v) > 30 || !strings.Contains(v, "send") {
+		t.Fatalf("view with input box:\n%s", v)
+	}
+	m.Update(key("h"))
+	m.Update(key("i"))
+	if m.answer.Value() != "hi" {
+		t.Fatalf("typing goes to the input, got %q", m.answer.Value())
+	}
+	m.Update(key("up"))
+	if rs.focusInput {
+		t.Fatal("up moves focus to the history")
+	}
+	m.Update(key("c")) // history focused: not typed as text
+	if m.answer.Value() != "hi" {
+		t.Fatal("keys must not reach the input while the history is focused")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if rs.follow || m.vp.AtBottom() {
+		t.Fatal("history scrolls")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m.refreshRun() // follow re-enabled: next refresh sticks to the bottom
+	m.Update(key("down"))
+	if !rs.focusInput {
+		t.Fatal("down at the bottom returns to the input")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if rs.ask != "" || rs.focusInput || m.answer.Value() != "" {
+		t.Fatal("enter sends the answer")
+	}
+	m.onEvent(runEventMsg{card: id, ev: runner.Event{Kind: runner.KindAsk, Prompt: "x"}})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeBoard {
+		t.Fatal("esc leaves the run view even while asking")
 	}
 }
